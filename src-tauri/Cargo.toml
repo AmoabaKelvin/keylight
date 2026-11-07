@@ -1,6 +1,6 @@
 [package]
 name = "keylight"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lights, shapes and keys for the NuPhy Air75 V3"
 edition = "2024"
 
