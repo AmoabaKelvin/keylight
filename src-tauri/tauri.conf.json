@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Keylight",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.kelvinamoaba.keylight",
   "build": {
     "frontendDist": "../dist",
@@ -37,8 +37,17 @@
     "category": "Utility",
     "copyright": "Kelvin Amoaba",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.png"],
+    "createUpdaterArtifacts": true,
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM2Mjc5NDQ4NUZGRjg3RDcKUldUWGgvOWZTSlFueGxQV2lQMXllcEZqVjcxOHAvT0VPd0pJc09QZFZucXNDSTdwYUhYNGtsV2gK",
+      "endpoints": ["https://github.com/AmoabaKelvin/keylight/releases/latest/download/latest.json"],
+      "requireSignedVersion": true
     }
   }
 }

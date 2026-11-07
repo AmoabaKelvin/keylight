@@ -111,3 +111,19 @@ export function backupOnce(): Promise<string> {
   )
   return backupPath
 }
+
+/** The running version, and a newer one if the last check found it (see src-tauri/src/update.rs). */
+export type UpdateStatus = { version: string; available: string | null }
+
+export function updateStatus(): Promise<UpdateStatus> {
+  return invoke('update_status')
+}
+
+export function checkForUpdate(): Promise<UpdateStatus> {
+  return invoke('update_check')
+}
+
+/** Downloads the new version, swaps it in and relaunches. Only settles if that fails. */
+export function installUpdate(): Promise<void> {
+  return invoke('update_install')
+}

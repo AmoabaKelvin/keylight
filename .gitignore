@@ -29,3 +29,4 @@ src-tauri/gen
 site/node_modules
 site/dist
 .wrangler
+.claude/

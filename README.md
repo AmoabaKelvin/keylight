@@ -37,7 +37,7 @@ I have tested Keylight on the ANSI Air75 V3 with firmware 1.0.23.6. It detects I
 
 ### Download
 
-Get `Keylight.app` from [Releases](https://github.com/AmoabaKelvin/keylight/releases/latest) and move it to Applications. The download is for Apple silicon Macs; on an Intel Mac, build from source.
+Get `Keylight.app` from [Releases](https://github.com/AmoabaKelvin/keylight/releases/latest) and move it to Applications. It runs on Apple silicon and Intel Macs. From 0.2.0 on, Keylight updates itself: it looks for a new version once a day, and Device → Updates checks on demand.
 
 Releases aren't signed yet, so macOS blocks the first launch. Right-click the app and choose **Open**. On macOS 15 and later that no longer works; open the app once, then click **Open Anyway** in System Settings → Privacy & Security. Or clear the quarantine flag:
 

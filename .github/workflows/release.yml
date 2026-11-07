@@ -1,0 +1,95 @@
+# Builds a universal Keylight.app and puts it on a GitHub release with the updater files.
+#
+# A v* tag publishes the release, and running apps pick it up through latest.json.
+# Running it by hand (workflow_dispatch) builds into a draft release, which nobody sees and
+# no app updates from. Delete the draft when you're done with it.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # A tag gets its own release; a manual run gets a draft under a throwaway tag name.
+      # GitHub only creates a draft's tag when the draft is published.
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('test-{0}', github.run_id) }}
+      DRAFT: ${{ github.ref_type != 'tag' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check the tag matches the app version
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG doesn't match version $version in tauri.conf.json"
+            exit 1
+          fi
+
+      - name: Build and upload the app and updater files
+        id: tauri
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseName: Keylight __VERSION__
+          releaseDraft: ${{ env.DRAFT }}
+          generateReleaseNotes: true
+          releaseBody: |
+            **Requirements:** a Mac on macOS 13 or later (Apple silicon or Intel) and an Air75 V3 connected with the USB cable. The 2.4G dongle and Bluetooth can't carry settings.
+
+            **First launch:** the app isn't notarised. Unzip it, move it to Applications and open it once. Then go to System Settings → Privacy & Security and click Open Anyway.
+
+            **Updating:** from 0.2.0 on, Keylight updates itself from Device → Updates or the menu bar menu. On 0.1.0, download this one by hand.
+
+            Unofficial; not affiliated with NuPhy.
+          args: --target universal-apple-darwin --bundles app
+
+      - name: Zip the app and add it to the release
+        run: |
+          version='${{ steps.tauri.outputs.appVersion }}'
+          zip="Keylight-$version-universal.zip"
+          ditto -c -k --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/Keylight.app "$zip"
+          lipo -archs src-tauri/target/universal-apple-darwin/release/bundle/macos/Keylight.app/Contents/MacOS/keylight
+          gh release upload "$TAG" "$zip" --clobber
+          {
+            echo "### Keylight $version"
+            echo
+            echo "Release: ${{ steps.tauri.outputs.releaseHtmlUrl }}"
+            echo
+            echo "\`$zip\` sha256 (for the Homebrew cask): \`$(shasum -a 256 "$zip" | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
