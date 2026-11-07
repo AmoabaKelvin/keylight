@@ -352,13 +352,14 @@ function Faq() {
   )
 }
 
-const ROADMAP: { title: string; note: string; status: 'Planned' | 'Researching' }[] = [
+const ROADMAP: { title: string; note: string; status: 'Shipped' | 'Planned' | 'Researching' }[] = [
   { title: 'Firmware updates in the app', note: "Install NuPhy's official firmware from Keylight, without NuPhy IO.", status: 'Researching' },
   { title: 'Custom firmware', note: 'Research first, and a test plan that keeps a way back to stock firmware before anything ships.', status: 'Researching' },
-  { title: 'Macro recorder and editor', note: 'Record a sequence of keys and edit it, then put it on any key.', status: 'Planned' },
-  { title: 'Advanced key editors', note: 'SOCD, Tap Dance and Toggle keys. Keylight shows them in the keymap today but cannot edit them yet.', status: 'Planned' },
-  { title: 'More NuPhy keyboards', note: 'Boards that NuPhy IO configures may use the same commands. Owners can help by opening an issue.', status: 'Researching' },
-  { title: 'Signed releases with auto-update', note: 'Signed and notarised builds, so macOS opens them without the extra step, and updates from inside the app.', status: 'Planned' },
+  { title: 'More NuPhy keyboards', note: 'ISO and JIS Air75 V3 boards are drawn in their own layouts. The Air65 V3 and Air100 V3 use the same commands and come next. Owners can help by opening an issue.', status: 'Researching' },
+  { title: 'Signed and notarised releases', note: 'So macOS opens Keylight without the Open Anyway step.', status: 'Planned' },
+  { title: 'Macro recorder and editor', note: 'Record a sequence of keys or build it step by step, then put it on any key. In 0.2.', status: 'Shipped' },
+  { title: 'Updates from inside the app', note: 'Keylight checks for a new version once a day and installs it when you say so. Since 0.2.', status: 'Shipped' },
+  { title: 'Advanced key editors', note: 'SOCD, Tap Dance and Toggle keys. In 0.3.', status: 'Shipped' },
 ]
 
 function Roadmap() {

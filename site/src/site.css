@@ -456,6 +456,11 @@ code {
   background: var(--accent-soft);
 }
 
+.status.shipped {
+  color: var(--ok, #2f9e6a);
+  background: color-mix(in srgb, var(--ok, #2f9e6a) 13%, transparent);
+}
+
 .status.researching {
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 13%, transparent);
