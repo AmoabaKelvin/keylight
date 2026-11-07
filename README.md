@@ -32,9 +32,17 @@ Website: [nuphy.kelvinamoaba.com](https://nuphy.kelvinamoaba.com)
 - A NuPhy Air75 V3 connected with the **USB cable**. The 2.4G dongle and Bluetooth only carry keystrokes, so Keylight can't change settings through them. You can keep typing over either one; Keylight saves your settings and applies them the next time the cable is plugged in.
 - [Karabiner-Elements](https://karabiner-elements.pqrs.org), only for the Hyper key and the Caps Lock rules.
 
-I have tested Keylight on the ANSI Air75 V3 with firmware 1.0.23.6. It detects ISO and JIS boards, but draws them as ANSI.
+I have tested Keylight on the ANSI Air75 V3 with firmware 1.0.23.6. ISO and JIS boards are drawn in their own layouts too, picked from the USB product ID; if that's wrong, choose the layout on the Device page. Their LED and key maps come from NuPhy IO's data and haven't been checked on a real ISO or JIS board yet.
 
 ## Install
+
+### Homebrew
+
+```sh
+brew tap amoabakelvin/tap
+brew trust amoabakelvin/tap
+brew install --cask keylight
+```
 
 ### Download
 
@@ -119,7 +127,7 @@ NuPhy doesn't publish the protocol. I worked it out from NuPhy IO, NuPhy's web c
 
 Issues and pull requests are welcome. The most useful help comes from people who own:
 
-- **An ISO or JIS Air75 V3.** I've only checked the LED and key-matrix maps on ANSI. An issue saying which keys light up wrong, or a screenshot of the Keymap page, is enough to start.
+- **An ISO or JIS Air75 V3.** Keylight draws both, but I've only checked the LED and key-matrix maps on ANSI. An issue saying which keys light up wrong, or a screenshot of the Keymap page, is enough to start.
 - **Another NuPhy keyboard.** Other boards that NuPhy IO configures may use the same commands. Send the USB product ID, the firmware version NuPhy IO shows, and whether Keylight connects at all.
 
 When you change the protocol code, keep to commands already documented in `docs/PROTOCOL.md`, and never add one to the allowlist without knowing what it does.

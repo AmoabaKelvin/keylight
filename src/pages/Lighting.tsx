@@ -8,6 +8,7 @@ import { compose, ownsKeys } from '../lib/compose'
 import { EFFECTS, effect, FIRMWARE_SHAPES } from '../lib/effects'
 import { keyName } from '../lib/layout'
 import { useThrottle } from '../lib/useDaemon'
+import { useLayout } from '../lib/useLayout'
 
 const THEMES: { value: Base['name']; label: string }[] = [
   { value: 'solid', label: 'Solid' },
@@ -28,10 +29,11 @@ const gear = (wire = 2) => 4 - wire
 export function LightingPage({ ctx }: { ctx: Ctx }) {
   const { state, send } = ctx
   const base = state.base
+  const board = useLayout()
 
   /** Change the theme: the screen updates now, the keyboard as fast as the daemon allows. */
   const apply = (next: Base) =>
-    send({ op: 'base', ...next }, (s) => ({ ...s, base: next, frame: s.hyper ? s.frame : compose(next, s.layers) }))
+    send({ op: 'base', ...next }, (s) => ({ ...s, base: next, frame: s.hyper ? s.frame : compose(next, s.layers, board) }))
   const applyThrottled = useThrottle(apply, 90)
   // Effects and shapes change light-state settings, which the keyboard keeps: go easier on those.
   const applySlow = useThrottle(apply, 400)

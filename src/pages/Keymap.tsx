@@ -7,8 +7,9 @@ import { Segmented } from '../components/controls'
 import { advancedOf, apply, describeWord, planCleanup, readMode, readTables, socdAt, SLOTS, tapDanceAt, toggleAt, references, TYPE_NAMES, describeTapDance, describeToggle, type Os, type Tables } from '../lib/advanced'
 import { backupOnce, daemon } from '../lib/api'
 import { OFF, type RGB } from '../lib/color'
-import { decode, DEFAULT_LAYERS, KEYCODES, KNOB_IDS, layerOf, macroCode, MATRIX, matrixIndex, offeredIn, TRANSPARENT, type KeyCode } from '../lib/keycodes'
-import { BY_ID, KEY_LEDS, keyName } from '../lib/layout'
+import { decode, KEYCODES, KNOB_IDS, layerOf, macroCode, offeredIn, TRANSPARENT, type KeyCode } from '../lib/keycodes'
+import { keyName } from '../lib/layout'
+import { useLayout } from '../lib/useLayout'
 import { macroName, macroTitle } from '../lib/macros'
 import type { AdvancedFocus } from './Advanced'
 
@@ -59,6 +60,8 @@ export function KeymapPage({
   onEditAdvanced?: (f: AdvancedFocus) => void
 }) {
   const { state } = ctx
+  const { matrix: MATRIX, defaults: DEFAULT_LAYERS, byId: BY_ID, keyLeds: KEY_LEDS } = useLayout()
+  const matrixIndex = (id: string) => MATRIX.indexOf(id)
   const [os, setOs] = useState<0 | 1>(target ? target.os : state.device.os === 'windows' ? 1 : 0)
   /** The advanced-key tables, so SOCD, Tap Dance and Toggle keys can say what they do. */
   const [tables, setTables] = useState<Tables | null>(null)
@@ -107,7 +110,7 @@ export function KeymapPage({
         setError(String(e))
       }
     },
-    [state.connected],
+    [state.connected, DEFAULT_LAYERS],
   )
 
   useEffect(() => {
@@ -232,7 +235,7 @@ export function KeymapPage({
   if (selected) rings[selected] = 'var(--text)'
 
   // A plain board, so legends read clearly; the selected and changed keys glow.
-  const frame: RGB[] = useMemo(() => Array.from({ length: KEY_LEDS }, () => OFF), [])
+  const frame: RGB[] = useMemo(() => Array.from({ length: KEY_LEDS }, () => OFF), [KEY_LEDS])
 
   /** This mode's Tap Dance and Toggle keys, to put one on another key as well. SOCD pairs are made on the Advanced keys page. */
   const advancedChoices: KeyCode[] = useMemo(() => {

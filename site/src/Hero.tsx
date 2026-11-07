@@ -7,7 +7,11 @@ import { Tip } from '../../src/components/Page'
 import { OFF, isOff, type RGB } from '../../src/lib/color'
 import { baseFrame, compose } from '../../src/lib/compose'
 import { decode, DEFAULT_LAYERS, matrixIndex } from '../../src/lib/keycodes'
-import { BY_ID, KEY_LEDS, keyName, type Key } from '../../src/lib/layout'
+import { BOARDS, keyName, type Key } from '../../src/lib/layout'
+
+/** The site shows the ANSI board. */
+const BOARD = BOARDS.ansi
+const { byId: BY_ID, keyLeds: KEY_LEDS } = BOARD
 import { PRESETS } from '../../src/lib/shapes'
 
 type Scene = {
@@ -48,24 +52,24 @@ function hyperFrame(): RGB[] {
 
 const side = (color: RGB, mode = 2, brightness = 70): SideView => ({ mode, brightness, speed: 2, color })
 
-const slashes = PRESETS.find((p) => p.id === 'slashes')!.build()
+const slashes = PRESETS.find((p) => p.id === 'slashes')!.build(BOARD)
 
 const SCENES: Scene[] = [
-  { id: 'warm', label: 'Solid', caption: 'Solid, in Warm. One colour on every key.', frame: baseFrame({ name: 'solid', color: WARM }), side: side(WARM, 2, 55) },
+  { id: 'warm', label: 'Solid', caption: 'Solid, in Warm. One colour on every key.', frame: baseFrame({ name: 'solid', color: WARM }, BOARD), side: side(WARM, 2, 55) },
   {
     id: 'gradient',
     label: 'Gradient',
     caption: 'A gradient from cyan on the left to pink on the right.',
-    frame: baseFrame({ name: 'gradient', color: CYAN, color2: PINK }),
+    frame: baseFrame({ name: 'gradient', color: CYAN, color2: PINK }, BOARD),
     side: side(PURPLE),
   },
-  { id: 'rainbow', label: 'Rainbow', caption: 'Rainbow, with the side lights on neon.', frame: baseFrame({ name: 'rainbow' }), side: side(PINK, 1, 80) },
-  { id: 'stripes', label: 'Stripes', caption: 'One colour per row. Each row can be any colour.', frame: baseFrame({ name: 'stripes' }), side: side([255, 255, 255], 3, 60) },
+  { id: 'rainbow', label: 'Rainbow', caption: 'Rainbow, with the side lights on neon.', frame: baseFrame({ name: 'rainbow' }, BOARD), side: side(PINK, 1, 80) },
+  { id: 'stripes', label: 'Stripes', caption: 'One colour per row. Each row can be any colour.', frame: baseFrame({ name: 'stripes' }, BOARD), side: side([255, 255, 255], 3, 60) },
   {
     id: 'wave',
     label: 'Effect',
     caption: "Wave, one of the keyboard's 19 built-in effects. The keyboard runs it, and the drawing hints at it.",
-    frame: baseFrame({ name: 'effect', rgb: true }),
+    frame: baseFrame({ name: 'effect', rgb: true }, BOARD),
     side: side(CYAN, 1, 70),
     motion: { look: 'wave', seconds: 3.2 },
     animated: true,
@@ -74,7 +78,7 @@ const SCENES: Scene[] = [
     id: 'shape',
     label: 'Shapes',
     caption: 'A painted shape on top of a dim theme. This one is the Slashes preset.',
-    frame: compose({ name: 'solid', color: WARM, level: 14 }, [{ name: 'Slashes', visible: true, leds: slashes }]),
+    frame: compose({ name: 'solid', color: WARM, level: 14 }, [{ name: 'Slashes', visible: true, leds: slashes }], BOARD),
     side: side([200, 0, 0], 2, 60),
   },
   { id: 'hyper', label: 'Hyper held', caption: 'Right ⌘ held. Only the keys with a Hyper shortcut stay lit.', frame: hyperFrame(), side: side(PURPLE, 4), hyper: true },

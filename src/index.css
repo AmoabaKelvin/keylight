@@ -620,7 +620,7 @@ p {
   background: #1c1c1b;
 }
 
-.mini rect.off {
+.mini .off {
   fill: #2a2a28;
 }
 

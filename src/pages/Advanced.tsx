@@ -47,8 +47,9 @@ import {
 } from '../lib/advanced'
 import { OFF, type RGB } from '../lib/color'
 import { backupOnce } from '../lib/api'
-import { DEFAULT_LAYERS, matrixIndex, MATRIX, TRANSPARENT } from '../lib/keycodes'
-import { BY_ID, KEY_LEDS, keyName } from '../lib/layout'
+import { TRANSPARENT } from '../lib/keycodes'
+import { keyName, type Board } from '../lib/layout'
+import { useLayout } from '../lib/useLayout'
 
 /** Open the page on this mode and type, and on the advanced key in `slot` if given. */
 export type AdvancedFocus = { os: Os; type: AdvancedType; slot?: number }
@@ -84,16 +85,19 @@ const blank = (type: AdvancedType): Draft =>
       ? { type, slot: null, key: null, tap: 0, double: 0, hold: 0, delay: DEFAULT_DELAY }
       : { type, slot: null, key: null, code: 0 }
 
-const keyAt = (r: Ref) => {
-  const id = MATRIX[r.index]
-  const k = id ? BY_ID.get(id) : undefined
+const keyAt = (board: Board, r: Ref) => {
+  const id = board.matrix[r.index]
+  const k = id ? board.byId.get(id) : undefined
   return k ? keyName(k) : `key ${r.index}`
 }
-const where = (r: Ref) => (r.sub ? `${keyAt(r)} (${SUBS[r.sub]})` : keyAt(r))
+const where = (board: Board, r: Ref) => (r.sub ? `${keyAt(board, r)} (${SUBS[r.sub]})` : keyAt(board, r))
 const sameRef = (a: Ref | null, b: Ref | null) => !!a && !!b && a.sub === b.sub && a.index === b.index
 
 export function AdvancedPage({ ctx, focus, onFocusEnd }: { ctx: Ctx; focus?: AdvancedFocus | null; onFocusEnd?: () => void }) {
   const { state } = ctx
+  const board = useLayout()
+  const { matrix: MATRIX, defaults: DEFAULT_LAYERS, byId: BY_ID, keyLeds: KEY_LEDS } = board
+  const matrixIndex = (id: string) => MATRIX.indexOf(id)
   const [os, setOs] = useState<Os>(focus ? focus.os : state.device.os === 'windows' ? 1 : 0)
   const [sub, setSub] = useState<0 | 1 | 2 | 3>(0)
   const [modes, setModes] = useState<Partial<Record<Os, Mode>>>({})
@@ -203,7 +207,7 @@ export function AdvancedPage({ ctx, focus, onFocusEnd }: { ctx: Ctx; focus?: Adv
     setSaved(null)
     if (adv) {
       const item = itemFor(adv.type, adv.slot)
-      if (isNew) return setNote(`${keyAt(ref)} is already a ${TYPE_NAMES[adv.type].name}. Pick another key.`)
+      if (isNew) return setNote(`${keyAt(board, ref)} is already a ${TYPE_NAMES[adv.type].name}. Pick another key.`)
       if (item) select(item)
       return
     }
@@ -212,7 +216,7 @@ export function AdvancedPage({ ctx, focus, onFocusEnd }: { ctx: Ctx; focus?: Adv
     if (draft.type === 'socd') {
       if (draft.keys.some((k) => sameRef(k, ref))) return setDraft({ ...draft, keys: draft.keys.map((k) => (sameRef(k, ref) ? null : k)) })
       const code = typed(ref)
-      if (!socdOutput(code)) return setNote(`SOCD keys must type a single key, like a letter. ${keyAt(ref)} sends ${actionLabel(code, os).name}.`)
+      if (!socdOutput(code)) return setNote(`SOCD keys must type a single key, like a letter. ${keyAt(board, ref)} sends ${actionLabel(code, os).name}.`)
       const slot = draft.keys[0] ? (draft.keys[1] ? null : 1) : 0
       if (slot === null) return setNote('Both keys are picked. Click one of them to take it out.')
       setNote(null)
@@ -232,7 +236,7 @@ export function AdvancedPage({ ctx, focus, onFocusEnd }: { ctx: Ctx; focus?: Adv
       const code = typed(ref)
       if (!socdOutput(code)) {
         setDraft(d)
-        return setNote(`SOCD keys must type a single key, like a letter. ${keyAt(ref)} sends ${actionLabel(code, os).name}.`)
+        return setNote(`SOCD keys must type a single key, like a letter. ${keyAt(board, ref)} sends ${actionLabel(code, os).name}.`)
       }
       return setDraft({ ...d, keys: [ref, null] })
     }
@@ -319,12 +323,12 @@ export function AdvancedPage({ ctx, focus, onFocusEnd }: { ctx: Ctx; focus?: Adv
           return run([...planEdit(os, 'socd', sa, encodeSocd({ ...ea, prio: pa })), ...planEdit(os, 'socd', sb, encodeSocd({ ...eb, prio: pb }))], 'Saved the pair.')
         }
         const plan = planSocd(os, refs, [a, b], [typed(a), typed(b)], draft.prio)
-        return run(plan.ops, `${keyAt(a)} and ${keyAt(b)} are an SOCD pair now.`, () => setDraft({ ...draft, slots: plan.slots }))
+        return run(plan.ops, `${keyAt(board, a)} and ${keyAt(board, b)} are an SOCD pair now.`, () => setDraft({ ...draft, slots: plan.slots }))
       }
       const bytes = draft.type === 'tapdance' ? encodeTapDance(draft, os) : encodeToggle(draft, os)
       if (draft.slot !== null && selectedItem) return run(planEdit(os, draft.type, draft.slot, bytes), `Saved the ${TYPE_NAMES[draft.type].name}.`)
       const plan = planSingle(os, refs, draft.type, draft.key!, bytes)
-      return run(plan.ops, `${keyAt(draft.key!)} is a ${TYPE_NAMES[draft.type].name} now.`, () => setDraft({ ...draft, slot: plan.slot }))
+      return run(plan.ops, `${keyAt(board, draft.key!)} is a ${TYPE_NAMES[draft.type].name} now.`, () => setDraft({ ...draft, slot: plan.slot }))
     } catch (e) {
       setError(String(e).replace(/^Error: /, ''))
     }
@@ -341,7 +345,7 @@ export function AdvancedPage({ ctx, focus, onFocusEnd }: { ctx: Ctx; focus?: Adv
         return { ref, word, restore: socdOutput(own) ? own : advancedOf(stock) ? (ref.sub ? TRANSPARENT : 0) : stock }
       }),
     )
-    const names = keys.map((k) => keyAt(k.ref)).join(' and ')
+    const names = keys.map((k) => keyAt(board, k.ref)).join(' and ')
     run(planRemove(os, mode, keys), `Removed. ${names} ${keys.length === 1 ? 'is a plain key' : 'are plain keys'} again.`, () => setDraft(null))
   }
 
@@ -449,7 +453,7 @@ export function AdvancedPage({ ctx, focus, onFocusEnd }: { ctx: Ctx; focus?: Adv
           >
             <div className="adv-editor-head">
               <h3>{selectedItem ? TYPE_NAMES[draft.type].name : `New ${TYPE_NAMES[draft.type].name}`}</h3>
-              <p className="row-help">{headline(draft, selectedItem)}</p>
+              <p className="row-help">{headline(board, draft, selectedItem)}</p>
             </div>
 
             {draft.type === 'socd' && (
@@ -502,17 +506,18 @@ export function AdvancedPage({ ctx, focus, onFocusEnd }: { ctx: Ctx; focus?: Adv
   )
 }
 
-function headline(d: Draft, item: Item | null | undefined): string {
-  const keys = item ? item.refs.flat().map(where) : []
+function headline(board: Board, d: Draft, item: Item | null | undefined): string {
+  const keys = item ? item.refs.flat().map((r) => where(board, r)) : []
   if (d.type === 'socd') {
     if (item && item.slots.length === 1) return `${keys.join(', ')} lost the other key of its pair, so it types on its own. Remove it to make it a plain key again.`
-    return item ? `On ${keys.join(' and ')}.` : d.keys[0] && d.keys[1] ? `${where(d.keys[0])} and ${where(d.keys[1])}.` : 'Click two keys on the board.'
+    return item ? `On ${keys.join(' and ')}.` : d.keys[0] && d.keys[1] ? `${where(board, d.keys[0])} and ${where(board, d.keys[1])}.` : 'Click two keys on the board.'
   }
   if (item) return `On ${keys.join(', ')}.`
-  return d.key ? `On ${where(d.key)}.` : 'Click a key on the board.'
+  return d.key ? `On ${where(board, d.key)}.` : 'Click a key on the board.'
 }
 
 function ItemSummary({ item, mode, os }: { item: Item; mode: Mode; os: Os }) {
+  const board = useLayout()
   const t = mode.tables
   const on = item.refs.flat()
   const place = on.some((r) => r.sub) ? ` · ${SUBS[on[0].sub]}` : ''
@@ -533,7 +538,7 @@ function ItemSummary({ item, mode, os }: { item: Item; mode: Mode; os: Os }) {
         </span>
         <span className="adv-item-main">
           <span className="adv-item-title">{p ? p.label(caps[0], caps[1]) : 'Other key missing'}</span>
-          <span className="adv-item-sub">{on.map(keyAt).join(' and ') + place}</span>
+          <span className="adv-item-sub">{on.map((r) => keyAt(board, r)).join(' and ') + place}</span>
         </span>
       </>
     )
@@ -543,25 +548,26 @@ function ItemSummary({ item, mode, os }: { item: Item; mode: Mode; os: Os }) {
   return (
     <>
       <span className="adv-caps">
-        <span className="action-cap">{keyCapLabel(on[0])}</span>
+        <span className="action-cap">{keyCapLabel(board, on[0])}</span>
       </span>
       <span className="adv-item-main">
         <span className="adv-item-title">{text.charAt(0).toUpperCase() + text.slice(1)}</span>
-        <span className="adv-item-sub">{on.map(keyAt).join(', ') + place}</span>
+        <span className="adv-item-sub">{on.map((r) => keyAt(board, r)).join(', ') + place}</span>
       </span>
     </>
   )
 }
 
 /** The printed legend of the key at `r`, short enough for a keycap. */
-function keyCapLabel(r: Ref) {
-  const id = MATRIX[r.index]
-  const k = id ? BY_ID.get(id) : undefined
+function keyCapLabel(board: Board, r: Ref) {
+  const id = board.matrix[r.index]
+  const k = id ? board.byId.get(id) : undefined
   if (!k) return '?'
   return (k.label || keyName(k)).slice(0, 6)
 }
 
 function SocdEditor({ draft, caps, fixed, lone, onChange }: { draft: Extract<Draft, { type: 'socd' }>; caps: (string | null)[]; fixed: boolean; lone: boolean; onChange: (d: Draft) => void }) {
+  const board = useLayout()
   const [a, b] = [caps[0] ?? 'the first key', caps[1] ?? 'the second key']
   const prio = PRIORITIES.find((p) => p.value === draft.prio)!
   if (lone) return null
@@ -574,7 +580,7 @@ function SocdEditor({ draft, caps, fixed, lone, onChange }: { draft: Extract<Dra
             <span key={i} className="adv-slot-wrap">
               {i === 1 && <span className="adv-pair">⇄</span>}
               {k ? (
-                <button className="action-cap adv-cap-button" disabled={fixed} title={fixed ? keyAt(k) : `${keyAt(k)}. Click to take it out.`} onClick={() => onChange({ ...draft, keys: draft.keys.map((x, j) => (j === i ? null : x)) })}>
+                <button className="action-cap adv-cap-button" disabled={fixed} title={fixed ? keyAt(board, k) : `${keyAt(board, k)}. Click to take it out.`} onClick={() => onChange({ ...draft, keys: draft.keys.map((x, j) => (j === i ? null : x)) })}>
                   {caps[i]}
                 </button>
               ) : (

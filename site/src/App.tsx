@@ -257,7 +257,7 @@ function Download() {
         <div>
           <h3>Download</h3>
           <p>
-            Get <code>Keylight.app</code> from the <a href={RELEASES}>releases page</a> and move it to Applications. The download is for Apple silicon Macs; on an Intel Mac, build from source.
+            Get <code>Keylight.app</code> from the <a href={RELEASES}>releases page</a> and move it to Applications. It runs on Apple silicon and Intel Macs, and updates itself from then on. With Homebrew: <code>brew tap amoabakelvin/tap && brew trust amoabakelvin/tap && brew install --cask keylight</code>.
           </p>
           <p>
             Releases aren't signed yet, so macOS blocks the first launch. Open the app once, then click Open Anyway in System Settings › Privacy & Security. Or clear the

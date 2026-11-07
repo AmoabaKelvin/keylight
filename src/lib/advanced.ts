@@ -13,7 +13,8 @@
  * are written one at a time at their own offset, and cleared with zeros when nothing uses them.
  */
 import { backupOnce, daemon } from './api'
-import { advancedCode, decode, KEYCODES, keycode, MATRIX, type AdvancedType, type KeyCode } from './keycodes'
+import { advancedCode, decode, KEYCODES, keycode, type AdvancedType, type KeyCode } from './keycodes'
+import { BOARDS } from './layout'
 
 export type Os = 0 | 1
 export type { AdvancedType }
@@ -156,13 +157,16 @@ export const actionName = (code: number, os: Os) => actionLabel(code, os).name
 
 export type Refs = Record<AdvancedType, Map<number, Ref[]>>
 
+/** Keymap positions that are a key on any layout. A slot used only by an ISO or JIS key still counts as taken. */
+const REAL = new Set(Object.values(BOARDS).flatMap((b) => b.matrix.flatMap((id, i) => (id ? [i] : []))))
+
 /** Advanced key words on this mode's four layers, by type and slot. */
 export function references(layers: number[][]): Refs {
   const out: Refs = { socd: new Map(), tapdance: new Map(), tgl: new Map() }
   layers.forEach((keys, sub) =>
     keys.forEach((w, index) => {
       const a = advancedOf(w)
-      if (!a || !MATRIX[index]) return
+      if (!a || !REAL.has(index)) return
       const list = out[a.type].get(a.slot) ?? []
       list.push({ sub, index })
       out[a.type].set(a.slot, list)
