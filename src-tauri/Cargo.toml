@@ -1,6 +1,6 @@
 [package]
 name = "keylight"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lights, shapes and keys for the NuPhy Air75 V3"
 edition = "2024"
 
@@ -17,6 +17,7 @@ plist = "1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 tauri-plugin-autostart = "2"
 tauri = { version = "2.12.4", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-updater = "2"
 
 [profile.release]
 codegen-units = 1

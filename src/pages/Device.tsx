@@ -3,7 +3,8 @@ import type { Ctx } from '../App'
 import { Keyboard } from '../components/Keyboard'
 import { Page } from '../components/Page'
 import { Row, Slider, Toggle } from '../components/controls'
-import { autostart, daemon, type Sleep } from '../lib/api'
+import { listen } from '@tauri-apps/api/event'
+import { autostart, checkForUpdate, daemon, installUpdate, isNative, updateStatus, type Sleep, type UpdateStatus } from '../lib/api'
 import { Segmented } from '../components/controls'
 
 type Func = { stabilization: number; disable_win: boolean; disable_alt_f4: boolean; disable_alt_tab: boolean }
@@ -99,6 +100,8 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
         </p>
       </Row>
 
+      <Updates />
+
       <Row icon="terminal" title="From the command line">
         <p className="row-help">
           Karabiner tells Keylight about Hyper with <code>keylight hyper on</code>. Scripts can send anything the app can, e.g. <code>{`keylight send '{"op":"base","name":"rainbow"}'`}</code>. The command lives at <code>/Applications/Keylight.app/Contents/MacOS/keylight</code>.
@@ -111,5 +114,71 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
         </p>
       </Row>
     </Page>
+  )
+}
+
+/** Keylight's own version. The launch check (once a day) runs in the app; this row can check again and install. */
+function Updates() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null)
+  const [busy, setBusy] = useState<'checking' | 'installing' | null>(null)
+  const [result, setResult] = useState<'latest' | 'failed' | null>(null)
+  useEffect(() => {
+    if (!isNative) return
+    updateStatus().then(setStatus).catch(() => {})
+    const off = listen<UpdateStatus>('update', (e) => setStatus(e.payload))
+    return () => void off.then((f) => f())
+  }, [])
+  if (!status) return null
+
+  const check = () => {
+    setBusy('checking')
+    setResult(null)
+    checkForUpdate()
+      .then((s) => {
+        setStatus(s)
+        setResult(s.available ? null : 'latest')
+      })
+      .catch(() => setResult('failed'))
+      .finally(() => setBusy(null))
+  }
+  const install = () => {
+    setBusy('installing')
+    setResult(null)
+    installUpdate()
+      .catch(() => setResult('failed'))
+      .finally(() => setBusy(null))
+  }
+
+  const { version, available } = status
+  const text = available
+    ? busy === 'installing'
+      ? `Downloading ${available}. Keylight restarts by itself when it's done.`
+      : result === 'failed'
+        ? `The download didn't finish. Try again in a bit.`
+        : `Keylight ${available} is out. You have ${version}.`
+    : result === 'failed'
+      ? `Couldn't reach GitHub. Try again in a bit.`
+      : result === 'latest'
+        ? `${version} is the latest version.`
+        : `You have ${version}. Keylight looks for a new version once a day when it opens.`
+
+  return (
+    <Row
+      icon="update"
+      title="Updates"
+      aside={
+        available ? (
+          <button className="button small primary" disabled={busy !== null} onClick={install}>
+            {busy === 'installing' ? 'Installing…' : 'Install and restart'}
+          </button>
+        ) : (
+          <button className="button small" disabled={busy !== null} onClick={check}>
+            {busy === 'checking' ? 'Checking…' : 'Check for updates'}
+          </button>
+        )
+      }
+    >
+      <p className="row-help">{text}</p>
+    </Row>
   )
 }

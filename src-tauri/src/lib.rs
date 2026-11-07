@@ -8,6 +8,7 @@ mod engine;
 mod hid;
 mod karabiner;
 mod server;
+mod update;
 
 use engine::{Engine, Shared};
 use serde_json::{json, Value};
@@ -136,8 +137,8 @@ fn show_main(app: &AppHandle) {
     }
 }
 
-/// The menu bar icon: quick themes without opening the window.
-fn tray(app: &AppHandle) -> tauri::Result<()> {
+/// The menu bar menu: quick themes without opening the window, and a new version when there is one.
+fn tray_menu(app: &AppHandle, update: Option<&str>) -> tauri::Result<Menu<tauri::Wry>> {
     let item = |id: &str, text: &str| MenuItem::with_id(app, id, text, true, None::<&str>);
     let menu = Menu::with_items(
         app,
@@ -150,9 +151,25 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
             &item("theme:wave", "Wave")?,
             &item("theme:off", "Lights off")?,
             &PredefinedMenuItem::separator(app)?,
-            &item("quit", "Quit Keylight")?,
         ],
     )?;
+    if let Some(version) = update {
+        menu.append(&item("update", &format!("Update to {version} and restart"))?)?;
+    }
+    menu.append(&item("quit", "Quit Keylight")?)?;
+    Ok(menu)
+}
+
+/// Rebuilds the menu bar menu, with or without the update item.
+pub(crate) fn set_tray_menu(app: &AppHandle, update: Option<&str>) -> tauri::Result<()> {
+    if let Some(tray) = app.tray_by_id("keylight") {
+        tray.set_menu(Some(tray_menu(app, update)?))?;
+    }
+    Ok(())
+}
+
+fn tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = tray_menu(app, None)?;
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
     TrayIconBuilder::with_id("keylight")
         .icon(icon)
@@ -164,6 +181,15 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
             let msg = match event.id().as_ref() {
                 "open" => return show_main(app),
                 "quit" => return app.exit(0),
+                "update" => {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = update::install(app).await {
+                            eprintln!("update: {e}");
+                        }
+                    });
+                    return;
+                }
                 "theme:warm" => json!({ "op": "base", "name": "solid", "color": [255, 170, 110], "level": 100 }),
                 "theme:stripes" => json!({ "op": "base", "name": "stripes", "level": 100 }),
                 "theme:rainbow" => json!({ "op": "base", "name": "rainbow", "level": 100 }),
@@ -211,13 +237,16 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState { engine })
+        .manage(update::Pending::default())
         .setup(move |app| {
             tray(app.handle())?;
             // A menu bar utility should be there after a restart; it can be turned off in Device.
             if first_run {
                 let _ = app.autolaunch().enable();
             }
+            update::on_launch(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -227,7 +256,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![daemon, karabiner_rules, karabiner_set, karabiner_install, open_karabiner, autostart])
+        .invoke_handler(tauri::generate_handler![daemon, karabiner_rules, karabiner_set, karabiner_install, open_karabiner, autostart, update::update_status, update::update_check, update::update_install])
         .build(tauri::generate_context!())
         .expect("error while building Keylight")
         .run(|app, event| {
