@@ -1,5 +1,5 @@
 // Keylight's website: static files only, served by Workers static assets.
-// Build with `pnpm build`, then `pnpm deploy` (see README.md).
+// Build with `pnpm build`, then `pnpm run deploy` (see README.md).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "keylight-site",
