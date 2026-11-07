@@ -94,3 +94,20 @@ export function setKarabinerRule(description: string, enabled: boolean): Promise
 export function openKarabiner(): Promise<void> {
   return isNative ? invoke('open_karabiner') : Promise.resolve()
 }
+
+let backupPath: Promise<string> | null = null
+
+/**
+ * Saves all keymap layers and both macro areas to a file, once per run of the app, before the first
+ * keymap or macro write. Resolves to the file's path. A failed backup is retried next time.
+ */
+export function backupOnce(): Promise<string> {
+  backupPath ??= daemon<{ path: string }>({ op: 'backup' }).then(
+    (b) => b.path,
+    (e) => {
+      backupPath = null
+      throw e
+    },
+  )
+  return backupPath
+}
