@@ -12,6 +12,7 @@ Website: [nuphy.kelvinamoaba.com](https://nuphy.kelvinamoaba.com)
 - **Shapes.** Paint keys by hand, with a mirror mode, or start from a preset. Shapes are layers drawn on top of the theme, and each one can be hidden.
 - **Side lights.** Static, breathe, neon or off, in any colour.
 - **Keymap.** Remap any key on any of the eight layers, four for Mac mode and four for Windows. The knob's left turn, right turn and press are keys too. Keylight backs up your whole keymap before the first change.
+- **Macros.** Record a macro by typing it, or build it key by key, for each of the 32 slots in Mac and Windows mode. Name them, see which keys play them, and put one on a key in two clicks. Keylight backs up your keymap and macros before the first change.
 - **Hyper highlighting.** Hold Right ⌘ and only the keys you've bound to Hyper shortcuts light up. Click keys to mark them. If you use Tinycast, Keylight reads its Hyper shortcuts for you.
 - **Karabiner setup.** One click adds three Karabiner-Elements rules: Right ⌘ as Hyper, Caps Lock as Control with a double-tap for Caps Lock, and both Shifts together for Caps Lock.
 - **Device settings.** Auto-sleep timers, the typing filter against key chatter, and open at login. It also shows the firmware version and whether the keyboard is in Mac or Windows mode.
@@ -110,7 +111,6 @@ NuPhy doesn't publish the protocol. I worked it out from NuPhy IO, NuPhy's web c
 
 - An in-app firmware updater
 - Research into custom firmware
-- A macro recorder
 - Editors for the advanced keys: SOCD, Tap Dance and Toggle
 - Support for more NuPhy boards
 - Signed and notarized releases

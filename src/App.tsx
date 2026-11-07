@@ -8,6 +8,7 @@ import { HyperPage } from './pages/Hyper'
 import { KeymapPage } from './pages/Keymap'
 import { KeysPage } from './pages/Keys'
 import { LightingPage } from './pages/Lighting'
+import { MacrosPage } from './pages/Macros'
 import { ShapesPage } from './pages/Shapes'
 import { SidePage } from './pages/Side'
 
@@ -22,6 +23,7 @@ const PAGES = [
   { id: 'shapes', label: 'Shapes' },
   { id: 'side', label: 'Side lights' },
   { id: 'keymap', label: 'Keymap' },
+  { id: 'macros', label: 'Macros' },
   { id: 'hyper', label: 'Hyper' },
   { id: 'keys', label: 'Karabiner' },
   { id: 'device', label: 'Device' },
@@ -34,8 +36,13 @@ const highlight = { type: 'spring', stiffness: 500, damping: 38 } as const
 export default function App() {
   const { state, offline, send, pause } = useDaemon()
   const [page, setPage] = useState<PageId>(() => (localStorage.getItem('page') as PageId) || 'lighting')
+  /** A macro on its way from the Macros page to a key on the Keymap page. */
+  const [assign, setAssign] = useState<{ os: 0 | 1; id: number } | null>(null)
 
-  useEffect(() => localStorage.setItem('page', page), [page])
+  useEffect(() => {
+    localStorage.setItem('page', page)
+    if (page !== 'keymap') setAssign(null)
+  }, [page])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -73,7 +80,7 @@ export default function App() {
           <Connection state={state} offline={offline} />
           <div className="hints">
             <span>
-              <kbd>⌘1–7</kbd> pages
+              <kbd>⌘1–{PAGES.length}</kbd> pages
             </span>
             <span>
               <kbd>Right ⌘</kbd> Hyper
@@ -92,7 +99,15 @@ export default function App() {
           ) : page === 'side' ? (
             <SidePage ctx={ctx} />
           ) : page === 'keymap' ? (
-            <KeymapPage ctx={ctx} />
+            <KeymapPage ctx={ctx} assign={assign} onAssignEnd={() => setAssign(null)} onBack={() => setPage('macros')} />
+          ) : page === 'macros' ? (
+            <MacrosPage
+              ctx={ctx}
+              onAssign={(os, id) => {
+                setAssign({ os, id })
+                setPage('keymap')
+              }}
+            />
           ) : page === 'hyper' ? (
             <HyperPage ctx={ctx} />
           ) : page === 'keys' ? (

@@ -4,10 +4,11 @@ import type { Ctx } from '../App'
 import { Keyboard } from '../components/Keyboard'
 import { Page, Tip } from '../components/Page'
 import { Segmented } from '../components/controls'
-import { daemon } from '../lib/api'
+import { backupOnce, daemon } from '../lib/api'
 import { OFF, type RGB } from '../lib/color'
 import { decode, DEFAULT_LAYERS, KEYCODES, KNOB_IDS, layerOf, macroCode, MATRIX, matrixIndex, offeredIn, TRANSPARENT, type KeyCode } from '../lib/keycodes'
 import { BY_ID, KEY_LEDS, keyName } from '../lib/layout'
+import { macroName, macroTitle } from '../lib/macros'
 
 type Layer = { keys: number[]; defaults: number[] }
 
@@ -31,26 +32,41 @@ const GROUPS: { id: string; label: string; categories: string[] }[] = [
   { id: 'macros', label: 'Macros', categories: [] },
 ]
 
-const MACROS: KeyCode[] = Array.from({ length: 32 }, (_, i) => ({ code: macroCode(i), label: `M${i + 1}`, name: `Macro ${i + 1}`, category: 'macro' }))
+/** The 32 macros of an OS mode, with the names given on the Macros page. */
+const macros = (os: 0 | 1): KeyCode[] => Array.from({ length: 32 }, (_, i) => ({ code: macroCode(i), label: `M${i + 1}`, name: macroName(os, i) || `Macro ${i + 1}`, category: 'macro' }))
 /** macOS reads F14/F15 as screen brightness, which is how the stock Mac layer uses them. */
 const MAC_NAMES: Record<number, { label: string; name: string }> = {
   0x69: { label: 'Bright−', name: 'Screen brightness down (sent as F14)' },
   0x6a: { label: 'Bright+', name: 'Screen brightness up (sent as F15)' },
 }
-const label = (w: number) => ({ ...decode(w >> 8, w & 0xff), ...MAC_NAMES[w] })
 
-export function KeymapPage({ ctx }: { ctx: Ctx }) {
+type Assign = { os: 0 | 1; id: number }
+
+export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: Ctx; assign?: Assign | null; onAssignEnd?: () => void; onBack?: () => void }) {
   const { state } = ctx
-  const [os, setOs] = useState<0 | 1>(state.device.os === 'windows' ? 1 : 0)
+  const [os, setOs] = useState<0 | 1>(target ? target.os : state.device.os === 'windows' ? 1 : 0)
+  const label = (w: number) => (w >> 8 === 0x77 && (w & 0xff) < 32 ? { ...decode(w >> 8, w & 0xff), name: macroName(os, w & 0xff) ? `Macro ${(w & 0xff) + 1}, ${macroName(os, w & 0xff)}` : `Macro ${(w & 0xff) + 1}` } : { ...decode(w >> 8, w & 0xff), ...MAC_NAMES[w] })
   const [sub, setSub] = useState<0 | 1 | 2 | 3>(0)
   const [layers, setLayers] = useState<Record<number, Layer>>({})
   const [selected, setSelected] = useState<string | null>(null)
-  const [group, setGroup] = useState('basic')
+  const [group, setGroup] = useState(target ? 'macros' : 'basic')
   const [query, setQuery] = useState('')
   const [pending, setPending] = useState<{ code: number; warning: string } | null>(null)
   const [backup, setBackup] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** Where the macro sent here from the Macros page ended up. */
+  const [placed, setPlaced] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!target) return
+    setOs(target.os)
+    setSub(0)
+    setGroup('macros')
+    setQuery('')
+    setSelected(null)
+    setPlaced(null)
+  }, [target])
 
   const layer = layerOf(os, sub)
   const live = layers[layer]
@@ -101,13 +117,14 @@ export function KeymapPage({ ctx }: { ctx: Ctx }) {
     setBusy(true)
     setPending(null)
     try {
-      if (!backup) {
-        const b = await daemon<{ path: string }>({ op: 'backup' })
-        setBackup(b.path)
-      }
+      if (!backup) setBackup(await backupOnce())
       await daemon({ op: 'key_set', layer, index, word: code })
       setLayers((ls) => ({ ...ls, [layer]: { ...ls[layer], keys: ls[layer].keys.map((w, i) => (i === index ? code : w)) } }))
       setError(null)
+      if (target && code === macroCode(target.id) && selected) {
+        setPlaced(`${macroTitle(target.os, target.id)} is on ${selected.startsWith('knob') ? 'the knob' : keyName(BY_ID.get(selected)!)}${sub ? ` (${LAYERS[sub].label} layer)` : ''}.`)
+        onAssignEnd?.()
+      }
     } catch (e) {
       setError(String(e))
     }
@@ -125,7 +142,7 @@ export function KeymapPage({ ctx }: { ctx: Ctx }) {
     if (!live) return
     setBusy(true)
     try {
-      if (!backup) setBackup((await daemon<{ path: string }>({ op: 'backup' })).path)
+      if (!backup) setBackup(await backupOnce())
       for (let i = 0; i < live.keys.length; i++) {
         if (live.keys[i] !== live.defaults[i]) await daemon({ op: 'key_set', layer, index: i, word: live.defaults[i] })
       }
@@ -155,9 +172,9 @@ export function KeymapPage({ ctx }: { ctx: Ctx }) {
 
   const choices = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const all = [...KEYCODES.filter((k) => offeredIn(k, os) || k.code === TRANSPARENT), ...MACROS]
+    const all = [...KEYCODES.filter((k) => offeredIn(k, os) || k.code === TRANSPARENT), ...macros(os)]
     if (q) return all.filter((k) => k.label.toLowerCase().includes(q) || k.name.toLowerCase().includes(q)).slice(0, 80)
-    if (group === 'macros') return MACROS
+    if (group === 'macros') return macros(os)
     const cats = GROUPS.find((g) => g.id === group)!.categories
     return all.filter((k) => cats.includes(k.category))
   }, [group, query, os])
@@ -184,7 +201,7 @@ export function KeymapPage({ ctx }: { ctx: Ctx }) {
       state={state}
       actions={
         <div className="row-actions">
-          <Segmented value={os} options={[{ value: 0, label: 'Mac' }, { value: 1, label: 'Windows' }]} onChange={(v) => { setOs(v); setSelected(null) }} />
+          <Segmented value={os} options={[{ value: 0, label: 'Mac' }, { value: 1, label: 'Windows' }]} onChange={(v) => { setOs(v); setSelected(null); if (target) onAssignEnd?.() }} />
         </div>
       }
       board={
@@ -216,6 +233,27 @@ export function KeymapPage({ ctx }: { ctx: Ctx }) {
       }
     >
       {error && <p className="row-error">{error}</p>}
+      {(target || placed) && (
+        <div className="setup assign">
+          <p>
+            {target ? (
+              <>
+                Click a key, then pick <strong>{macroTitle(target.os, target.id)}</strong> below it to put the macro there.
+              </>
+            ) : (
+              placed
+            )}
+          </p>
+          {target && (
+            <button className="button quiet-plain" onClick={() => onAssignEnd?.()}>
+              Cancel
+            </button>
+          )}
+          <button className="button" onClick={() => onBack?.()}>
+            Back to Macros
+          </button>
+        </div>
+      )}
       {backup && <p className="row-help">Backed up your keymap and macros before the first change: <code>{backup.replace(/^.*\/Library/, '~/Library')}</code></p>}
 
       <AnimatePresence mode="wait">
@@ -266,7 +304,7 @@ export function KeymapPage({ ctx }: { ctx: Ctx }) {
               {choices.map((k) => (
                 <button
                   key={k.code}
-                  className={`code${k.code === current ? ' on' : ''}${k.danger ? ' danger' : ''}`}
+                  className={`code${k.code === current ? ' on' : ''}${k.danger ? ' danger' : ''}${target && k.code === macroCode(target.id) && k.code !== current ? ' suggest' : ''}`}
                   title={k.name}
                   disabled={!editable || busy}
                   onClick={() => assign(k.code)}
