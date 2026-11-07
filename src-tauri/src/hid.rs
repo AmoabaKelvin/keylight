@@ -33,10 +33,19 @@ pub const GET_MACRO: u8 = 0xC2;
 pub const SET_MACRO: u8 = 0xC3;
 pub const GET_FUNC: u8 = 0xE1;
 pub const SET_FUNC: u8 = 0xE2;
+pub const GET_SOCD: u8 = 0xB5;
+pub const SET_SOCD: u8 = 0xB6;
+pub const GET_TAP_DANCE: u8 = 0xB8;
+pub const SET_TAP_DANCE: u8 = 0xB9;
+pub const GET_TGL: u8 = 0xBB;
+pub const SET_TGL: u8 = 0xBC;
 /// Everything Keylight may send. Not here, on purpose: 0xEF (bootloader), 0xF1 (factory reset),
 /// 0xB4/0xB7/0xBA/0xBD (wipe keymaps and advanced keys), 0xFC, 0xFE and the firmware-only handlers.
-const ALLOWED: [u8; 15] = [
+/// The advanced-key tables are read and written one entry at a time (see `engine::Table`); their
+/// reset commands are left out, and an unused entry is cleared by writing zeros.
+const ALLOWED: [u8; 21] = [
     GET_BASE, GET_FW, GET_LIGHT, SET_LIGHT, SET_SIGNAL, SET_KEY, GET_SLEEP, SET_SLEEP, GET_DEFAULT_KEYS, GET_KEYS, SET_KEYS, GET_MACRO, SET_MACRO, GET_FUNC, SET_FUNC,
+    GET_SOCD, SET_SOCD, GET_TAP_DANCE, SET_TAP_DANCE, GET_TGL, SET_TGL,
 ];
 /// Bytes per keymap layer: 6 x 16 matrix plus 2 knob positions, 2 bytes each.
 pub const LAYER_BYTES: usize = 196;
@@ -185,4 +194,16 @@ pub fn firmware_version(b: &[u8]) -> Option<String> {
         v.push_str(&format!(".{}", b[4] as u16 | (b[5] as u16) << 8));
     }
     Some(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ALLOWED;
+
+    #[test]
+    fn never_the_bootloader_resets_or_wipes() {
+        for cmd in [0xEF, 0xF1, 0xB4, 0xB7, 0xBA, 0xBD, 0xFC, 0xFE] {
+            assert!(!ALLOWED.contains(&cmd), "{cmd:#04x} must not be sendable");
+        }
+    }
 }

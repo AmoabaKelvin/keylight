@@ -581,6 +581,8 @@ impl Engine {
             "key_set" => return self.key_set(msg),
             "macros" => return self.macros(msg),
             "macro_write" => return self.macro_write(msg),
+            "advanced" => return self.advanced(msg),
+            "advanced_write" => return self.advanced_write(msg),
             "func" => return self.func(msg),
             "reload" => self.load_hyper_keys(true),
             "refresh" => {
@@ -624,9 +626,10 @@ impl Engine {
         Ok(json!({ "layer": layer, "os_mode": self.mode, "keys": words(&keys), "defaults": defaults.as_deref().map(words) }))
     }
 
-    /// Saves all 8 keymap layers and both macro areas to a file before anything is changed.
+    /// Saves all 8 keymap layers, both macro areas and the three advanced-key tables to a file
+    /// before anything is changed.
     fn backup(&mut self) -> Result<Value, String> {
-        let (layers, macros) = self.with_kb(|kb, _| {
+        let (layers, macros, advanced) = self.with_kb(|kb, _| {
             let mut layers = Vec::new();
             for l in 0..8 {
                 layers.push(kb.get(hid::GET_KEYS, l * hid::LAYER_BYTES, hid::LAYER_BYTES, 0)?);
@@ -635,13 +638,17 @@ impl Engine {
             for os in 0..2 {
                 macros.push(kb.get(hid::GET_MACRO, os * hid::MACRO_BYTES, hid::MACRO_BYTES, 0)?);
             }
-            Ok((layers, macros))
+            let mut advanced = Map::new();
+            for t in TABLES {
+                advanced.insert(t.name.into(), json!(kb.get(t.get, 0, t.total, 0)?));
+            }
+            Ok((layers, macros, advanced))
         })?;
         let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let dir = crate::data_dir().join("backups");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let path = dir.join(format!("keymap-{secs}.json"));
-        let d = json!({ "saved": secs, "device": self.device, "layers": layers, "macros": macros });
+        let d = json!({ "saved": secs, "device": self.device, "layers": layers, "macros": macros, "advanced": advanced });
         std::fs::write(&path, d.to_string()).map_err(|e| e.to_string())?;
         Ok(json!({ "path": path.display().to_string(), "saved": secs }))
     }
@@ -654,6 +661,7 @@ impl Engine {
         if !(0..8).contains(&layer) || !(0..(hid::LAYER_BYTES as i64 / 2)).contains(&index) || !(0..=0xFFFF).contains(&word) {
             return Err("key_set needs layer 0-7, index 0-97 and a 16-bit word".into());
         }
+        check_key_word(index as usize, word as u16)?;
         let addr = layer as usize * hid::LAYER_BYTES + 2 * index as usize;
         self.with_kb(|kb, _| kb.set(hid::SET_KEYS, addr, &[(word >> 8) as u8, word as u8], 0))?;
         self.writes += 1;
@@ -675,6 +683,44 @@ impl Engine {
             return Err(format!("macro block must be {} bytes", hid::MACRO_BYTES));
         }
         self.with_kb(|kb, _| kb.set(hid::SET_MACRO, os * hid::MACRO_BYTES, &bytes, 0))?;
+        self.writes += 1;
+        Ok(Value::Null)
+    }
+
+    /// The advanced-key tables, whole (decoded by the app). `table` picks one; without it, all three.
+    fn advanced(&mut self, msg: &Value) -> Result<Value, String> {
+        let wanted: Vec<Table> = match msg.get("table").and_then(Value::as_str) {
+            Some(name) => vec![Table::named(name).ok_or(format!("no advanced table {name:?}"))?],
+            None => TABLES.to_vec(),
+        };
+        let out = self.with_kb(|kb, _| {
+            let mut out = Map::new();
+            for t in &wanted {
+                out.insert(t.name.into(), json!(kb.get(t.get, 0, t.total, 0)?));
+            }
+            Ok(out)
+        })?;
+        Ok(Value::Object(out))
+    }
+
+    /// Writes one advanced-key entry: `bytes` at `offset` in `table`. Never more than one entry,
+    /// and never across the Mac/Windows halves. (NuPhy IO writes an SOCD pair as one 8-byte packet,
+    /// which lands in someone else's slot when the pair's slots aren't next to each other.)
+    fn advanced_write(&mut self, msg: &Value) -> Result<Value, String> {
+        let name = msg.get("table").and_then(Value::as_str).unwrap_or("");
+        let t = Table::named(name).ok_or(format!("no advanced table {name:?}"))?;
+        let offset = msg.get("offset").and_then(Value::as_u64).ok_or("advanced_write needs an offset")?;
+        let bytes = msg
+            .get("bytes")
+            .and_then(Value::as_array)
+            .ok_or("advanced_write needs bytes")?
+            .iter()
+            .map(|v| v.as_u64().filter(|b| *b <= 0xFF).map(|b| b as u8))
+            .collect::<Option<Vec<u8>>>()
+            .ok_or("advanced_write bytes must be 0-255")?;
+        let offset = usize::try_from(offset).map_err(|_| "offset out of range")?;
+        t.check(offset, &bytes)?;
+        self.with_kb(|kb, _| kb.set(t.set, offset, &bytes, 0))?;
         self.writes += 1;
         Ok(Value::Null)
     }
@@ -751,6 +797,72 @@ impl Engine {
     }
 }
 
+/// One of the three advanced-key tables (docs/KEYMAP.md §5). Each is a Mac half then a Windows
+/// half of 32 entries; the key word `[0x7F, id]` names the slot and the OS mode picks the half.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Table {
+    pub name: &'static str,
+    get: u8,
+    set: u8,
+    /// Bytes in the whole table. The firmware doesn't bound reads, so never read past it.
+    pub total: usize,
+    pub entry: usize,
+}
+
+pub const TABLES: [Table; 3] = [
+    // [codeHi, codeLo, partnerSlot, priority]
+    Table { name: "socd", get: hid::GET_SOCD, set: hid::SET_SOCD, total: 256, entry: 4 },
+    // [tap, double tap, hold, delay in ms], each a big-endian u16
+    Table { name: "tapdance", get: hid::GET_TAP_DANCE, set: hid::SET_TAP_DANCE, total: 512, entry: 8 },
+    // [codeHi, codeLo]
+    Table { name: "tgl", get: hid::GET_TGL, set: hid::SET_TGL, total: 128, entry: 2 },
+];
+
+/// Slots per OS mode in each table.
+pub const SLOTS: usize = 32;
+
+impl Table {
+    pub fn named(name: &str) -> Option<Table> {
+        TABLES.into_iter().find(|t| t.name == name)
+    }
+
+    /// A write must be exactly one entry, start on an entry, and stay inside one OS mode's half.
+    pub fn check(&self, offset: usize, bytes: &[u8]) -> Result<(), String> {
+        let half = self.total / 2;
+        if bytes.len() != self.entry {
+            return Err(format!("a {} entry is {} bytes, got {}", self.name, self.entry, bytes.len()));
+        }
+        let inside = offset % self.entry == 0 && offset.checked_add(bytes.len()).is_some_and(|end| end <= self.total && offset / half == (end - 1) / half);
+        if !inside {
+            return Err(format!("offset {offset} isn't an entry inside one half of the {}-byte {} table", self.total, self.name));
+        }
+        // A partner past slot 31 would have the firmware read beyond the half.
+        if self.name == "socd" && (bytes[2] as usize >= SLOTS || bytes[3] > 1) {
+            return Err("an SOCD entry needs a partner slot 0-31 and a priority of 0 or 1".into());
+        }
+        Ok(())
+    }
+}
+
+/// Matrix positions of the knob: pressed (row 3, col 12), turned left, turned right.
+const KNOB_INDICES: [usize; 3] = [60, 96, 97];
+
+/// Refuses advanced-key words the keyboard can't use: slots past 31 (the firmware's bounds check
+/// is off by one), ids NuPhy never assigns, and any advanced key on the knob.
+fn check_key_word(index: usize, word: u16) -> Result<(), String> {
+    if word >> 8 != 0x7F {
+        return Ok(());
+    }
+    let id = (word & 0xFF) as usize;
+    if id >= 0xC0 || id % 64 >= SLOTS {
+        return Err(format!("{word:#06x} isn't an advanced key in slot 0-31"));
+    }
+    if KNOB_INDICES.contains(&index) {
+        return Err("the knob can't hold an advanced key".into());
+    }
+    Ok(())
+}
+
 fn parse_leds(v: &Value) -> Leds {
     v.as_object()
         .map(|o| o.iter().filter_map(|(k, c)| Some((k.parse::<u8>().ok().filter(|l| *l < KEY_LEDS)?, rgb(Some(c), OFF)))).collect())
@@ -759,4 +871,69 @@ fn parse_leds(v: &Value) -> Leds {
 
 fn leds_json(leds: &Leds) -> Value {
     Value::Object(leds.iter().map(|(l, c)| (l.to_string(), json!(c))).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table(name: &str) -> Table {
+        Table::named(name).unwrap()
+    }
+
+    #[test]
+    fn one_entry_per_write() {
+        let socd = table("socd");
+        assert!(socd.check(0, &[0, 4, 1, 1]).is_ok());
+        assert!(socd.check(124, &[0, 7, 0, 1]).is_ok(), "Mac slot 31");
+        assert!(socd.check(128, &[0, 7, 0, 1]).is_ok(), "Windows slot 0");
+        assert!(socd.check(252, &[0, 7, 0, 1]).is_ok(), "Windows slot 31");
+        // NuPhy IO's two-entry SOCD write is refused.
+        assert!(socd.check(0, &[0, 4, 1, 1, 0, 7, 0, 1]).is_err());
+        assert!(socd.check(0, &[0, 4]).is_err());
+        assert!(socd.check(0, &[]).is_err());
+    }
+
+    #[test]
+    fn offsets_stay_on_entries_inside_one_half() {
+        let td = table("tapdance");
+        assert!(td.check(0, &[0; 8]).is_ok());
+        assert!(td.check(248, &[0; 8]).is_ok());
+        assert!(td.check(256, &[0; 8]).is_ok());
+        assert!(td.check(504, &[0; 8]).is_ok());
+        assert!(td.check(512, &[0; 8]).is_err(), "past the end");
+        assert!(td.check(4, &[0; 8]).is_err(), "not on an entry");
+        let tgl = table("tgl");
+        assert!(tgl.check(62, &[0, 4]).is_ok());
+        assert!(tgl.check(64, &[0x52, 0x21]).is_ok());
+        assert!(tgl.check(126, &[0, 4]).is_ok());
+        assert!(tgl.check(128, &[0, 4]).is_err());
+        assert!(tgl.check(1, &[0, 4]).is_err());
+        assert!(tgl.check(usize::MAX - 1, &[0, 4]).is_err(), "no overflow");
+    }
+
+    #[test]
+    fn socd_partner_and_priority() {
+        let socd = table("socd");
+        assert!(socd.check(0, &[0, 4, 31, 0]).is_ok());
+        assert!(socd.check(0, &[0, 4, 32, 0]).is_err(), "partner slot 32 reads past the half");
+        assert!(socd.check(0, &[0, 4, 1, 2]).is_err());
+        assert!(socd.check(0, &[0, 0, 0, 0]).is_ok(), "clearing");
+    }
+
+    #[test]
+    fn advanced_key_words() {
+        assert!(check_key_word(1, 0x7F00).is_ok());
+        assert!(check_key_word(1, 0x7F1F).is_ok());
+        assert!(check_key_word(1, 0x7F20).is_err(), "SOCD slot 32");
+        assert!(check_key_word(1, 0x7F40).is_ok());
+        assert!(check_key_word(1, 0x7F60).is_err(), "Tap Dance slot 32");
+        assert!(check_key_word(1, 0x7F9F).is_ok());
+        assert!(check_key_word(1, 0x7FC0).is_err());
+        for knob in KNOB_INDICES {
+            assert!(check_key_word(knob, 0x7F41).is_err());
+            assert!(check_key_word(knob, 0x00A9).is_ok());
+        }
+        assert!(check_key_word(1, 0x7704).is_ok(), "macros are fine");
+    }
 }
