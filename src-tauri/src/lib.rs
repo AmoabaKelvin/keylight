@@ -7,6 +7,7 @@ mod caps;
 mod engine;
 mod hid;
 mod karabiner;
+mod layout;
 mod server;
 mod update;
 

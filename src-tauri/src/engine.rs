@@ -6,6 +6,7 @@
 //! whether the keyboard writes every change to flash.
 
 use crate::hid::{self, Keyboard};
+use crate::layout::{Layout, MAX_KEY_LEDS};
 use hidapi::HidApi;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -13,44 +14,18 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-pub const KEY_LEDS: u8 = 84;
 const CUSTOM_MODE: u8 = 21;
 const SHAPE_MODE: u8 = 22;
 const OFF: Rgb = [0, 0, 0];
-const ROWS: [(u8, u8); 6] = [(0, 15), (15, 30), (30, 45), (45, 59), (59, 73), (73, 84)];
 const STRIPES: [Rgb; 6] = [[255, 0, 0], [255, 90, 0], [255, 200, 0], [0, 220, 60], [0, 90, 255], [150, 0, 255]];
-const HEART: [u8; 19] = [23, 24, 26, 27, 37, 38, 39, 40, 41, 42, 52, 53, 54, 55, 56, 67, 68, 69, 77];
+/// The firmware heart (shape 0) by key, for the frame shown in the app; JIS has KANA where ANSI has Right ⌘.
+const HEART: [&str; 20] = ["8", "9", "-", "=", "u", "i", "o", "p", "[", "]", "j", "k", "l", ";", "'", ",", ".", "/", "rcmd", "kana"];
 const HYPER_MODS: i64 = 6912; // Carbon ⌃⌥⇧⌘
 const PREVIEW_TTL: Duration = Duration::from_secs(20);
 const SIDE_MIN_INTERVAL: Duration = Duration::from_millis(750);
 
 type Rgb = [u8; 3];
 type Leds = BTreeMap<u8, Rgb>;
-
-/// Key name (as the app uses them) -> LED index, Air75 V3 ANSI.
-pub fn led(name: &str) -> Option<u8> {
-    let fixed: &[(&str, u8)] = &[
-        ("esc", 0), ("screenshot", 13), ("ins", 14), ("`", 15), ("-", 26), ("=", 27), ("bksp", 28), ("pgup", 29),
-        ("tab", 30), ("[", 41), ("]", 42), ("\\", 43), ("pgdn", 44), ("caps", 45), (";", 55), ("'", 56), ("enter", 57),
-        ("home", 58), ("lshift", 59), (",", 67), (".", 68), ("/", 69), ("rshift", 70), ("up", 71), ("end", 72),
-        ("lctrl", 73), ("lopt", 74), ("lcmd", 75), ("space", 76), ("rcmd", 77), ("fn", 78), ("rctrl", 79),
-        ("left", 80), ("down", 81), ("right", 82),
-    ];
-    if let Some((_, l)) = fixed.iter().find(|(n, _)| *n == name) {
-        return Some(*l);
-    }
-    if let Some(n) = name.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()).filter(|n| (1..=12).contains(n)) {
-        return Some(n);
-    }
-    for (row, start) in [("1234567890", 16u8), ("qwertyuiop", 31), ("asdfghjkl", 46), ("zxcvbnm", 60)] {
-        if name.len() == 1 {
-            if let Some(i) = row.find(name) {
-                return Some(start + i as u8);
-            }
-        }
-    }
-    None
-}
 
 /// macOS (Carbon) virtual key code -> key name, for reading app hotkeys.
 fn carbon_key(code: i64) -> Option<&'static str> {
@@ -127,6 +102,10 @@ pub struct Engine {
     preview: Option<(Leds, Instant)>,
     hyper_keys: BTreeSet<String>,
     hyper_map: BTreeMap<String, String>,
+    /// Set from the Device page when the PID doesn't say the right layout.
+    layout_override: Option<Layout>,
+    /// The last layout a connected keyboard reported, kept for when none is plugged in.
+    last_layout: Option<Layout>,
     tinycast_mtime: Option<SystemTime>,
     writes: u64,
     path: PathBuf,
@@ -159,6 +138,8 @@ impl Engine {
             preview: None,
             hyper_keys: BTreeSet::new(),
             hyper_map: BTreeMap::new(),
+            layout_override: None,
+            last_layout: None,
             tinycast_mtime: None,
             writes: 0,
             path,
@@ -195,6 +176,14 @@ impl Engine {
         if let Some(a) = d.get("extra_hyper").and_then(Value::as_array) {
             self.extra_hyper = a.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
+        self.layout_override = d.get("layout_override").and_then(Value::as_str).and_then(Layout::from_name);
+        self.last_layout = d.get("last_layout").and_then(Value::as_str).and_then(Layout::from_name);
+    }
+
+    /// The layout to map keys and LEDs for: the override, else the keyboard's, else the last one seen, else ANSI.
+    fn layout(&self) -> Layout {
+        let detected = self.device.get("layout").and_then(Value::as_str).and_then(Layout::from_name);
+        self.layout_override.or(detected).or(self.last_layout).unwrap_or(Layout::Ansi)
     }
 
     fn save(&self) {
@@ -205,6 +194,8 @@ impl Engine {
             "side": self.side,
             "hyper_style": self.hyper_style,
             "extra_hyper": self.extra_hyper,
+            "layout_override": self.layout_override.map(Layout::name),
+            "last_layout": self.last_layout.map(Layout::name),
         });
         if let Some(dir) = self.path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -225,6 +216,7 @@ impl Engine {
             return;
         }
         self.tinycast_mtime = mtime;
+        let layout = self.layout();
         let mut map = BTreeMap::new();
         if let Ok(plist::Value::Dictionary(prefs)) = plist::Value::from_file(&path) {
             for (k, v) in prefs.iter() {
@@ -234,7 +226,7 @@ impl Engine {
                 if combo["carbonModifiers"].as_i64() != Some(HYPER_MODS) {
                     continue;
                 }
-                if let Some(key) = combo["carbonKeyCode"].as_i64().and_then(carbon_key).filter(|k| led(k).is_some()) {
+                if let Some(key) = combo["carbonKeyCode"].as_i64().and_then(carbon_key).filter(|k| layout.led(k).is_some()) {
                     let action = action.trim_start_matches("command:").trim_start_matches("systemAction.");
                     map.insert(key.to_string(), action.to_string());
                 }
@@ -260,8 +252,10 @@ impl Engine {
     fn base_frame(&self) -> Leds {
         let b = &self.base;
         let level = int(b.get("level"), 100).clamp(0, 100) as f64 / 100.0;
+        let layout = self.layout();
+        let heart: Vec<u8> = HEART.iter().filter_map(|k| layout.led(k)).collect();
         let mut frame = Leds::new();
-        for (r, (start, end)) in ROWS.iter().enumerate() {
+        for (r, (start, end)) in layout.row_ranges().iter().enumerate() {
             for l in *start..*end {
                 let t = (l - start) as f64 / ((end - start - 1).max(1)) as f64;
                 let c = match self.base_name() {
@@ -279,7 +273,7 @@ impl Engine {
                         }
                     }
                     "shape" => {
-                        if int(b.get("shape"), 0) == 0 && HEART.contains(&l) {
+                        if int(b.get("shape"), 0) == 0 && heart.contains(&l) {
                             rgb(b.get("color"), [255, 0, 0])
                         } else {
                             rgb(b.get("color2"), OFF)
@@ -299,15 +293,19 @@ impl Engine {
     }
 
     pub fn compose(&self) -> Leds {
-        let mut frame: Leds = (0..KEY_LEDS).map(|l| (l, OFF)).collect();
+        let layout = self.layout();
+        let n = layout.key_leds();
+        let mut frame: Leds = (0..n).map(|l| (l, OFF)).collect();
         if self.hyper {
             let bound = rgb(self.hyper_style.get("bound"), [0, 230, 255]);
             for k in &self.hyper_keys {
-                if let Some(l) = led(k) {
+                if let Some(l) = layout.led(k) {
                     frame.insert(l, bound);
                 }
             }
-            frame.insert(77, rgb(self.hyper_style.get("key"), [180, 0, 255]));
+            if let Some(l) = layout.led("rcmd") {
+                frame.insert(l, rgb(self.hyper_style.get("key"), [180, 0, 255]));
+            }
             return frame;
         }
         frame.extend(self.base_frame());
@@ -319,6 +317,7 @@ impl Engine {
         if let Some((p, _)) = &self.preview {
             frame.extend(p.iter().map(|(l, c)| (*l, *c)));
         }
+        frame.retain(|l, _| *l < n); // a shape drawn on a bigger layout
         frame
     }
 
@@ -374,12 +373,8 @@ impl Engine {
         match result {
             Ok(kb) => {
                 let fw = kb.get(hid::GET_FW, 0, 8, 0).ok();
-                let layout = match kb.pid {
-                    0x1029 => "jis",
-                    0x102A => "iso",
-                    0x1028 => "ansi",
-                    _ => "unknown",
-                };
+                let detected = Layout::from_pid(kb.pid);
+                let layout = detected.map_or("unknown", Layout::name);
                 self.device = json!({
                     "name": kb.name, "link": kb.link, "layout": layout,
                     "firmware": fw.as_deref().and_then(hid::firmware_version),
@@ -394,6 +389,11 @@ impl Engine {
                 self.main_sent = None;
                 self.last_error = None;
                 self.read_sleep();
+                if detected.is_some() && detected != self.last_layout {
+                    self.last_layout = detected;
+                    self.save();
+                }
+                self.load_hyper_keys(true); // which shortcut keys exist depends on the layout
                 true
             }
             Err(e) => {
@@ -568,7 +568,7 @@ impl Engine {
                 self.save();
             }
             "hyper_extra" => {
-                self.extra_hyper = msg.get("keys").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).filter(|k| led(k).is_some()).collect()).unwrap_or_default();
+                self.extra_hyper = msg.get("keys").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).filter(|k| Layout::ALL.iter().any(|l| l.led(k).is_some())).collect()).unwrap_or_default();
                 self.load_hyper_keys(true);
                 self.save();
             }
@@ -583,6 +583,12 @@ impl Engine {
             "macro_write" => return self.macro_write(msg),
             "func" => return self.func(msg),
             "reload" => self.load_hyper_keys(true),
+            "layout" => {
+                self.layout_override = msg.get("layout").and_then(Value::as_str).and_then(Layout::from_name);
+                self.sent.clear(); // LEDs mean different keys now: repaint them all
+                self.load_hyper_keys(true);
+                self.save();
+            }
             "refresh" => {
                 self.sent.clear();
                 self.side_sent = None;
@@ -709,7 +715,8 @@ impl Engine {
             Some(parse_leds(v))
         } else if let (Some(keys), Some(c)) = (msg.get("keys").and_then(Value::as_array), msg.get("color").filter(|c| c.is_array())) {
             let c = rgb(Some(c), OFF);
-            Some(keys.iter().filter_map(|k| led(k.as_str()?)).map(|l| (l, c)).collect())
+            let layout = self.layout();
+            Some(keys.iter().filter_map(|k| layout.led(k.as_str()?)).map(|l| (l, c)).collect())
         } else {
             None
         };
@@ -734,6 +741,8 @@ impl Engine {
         json!({
             "connected": self.kb.is_some(),
             "device": self.device,
+            "layout": self.layout().name(),
+            "layout_override": self.layout_override.map(Layout::name),
             "error": if self.kb.is_some() { None } else { self.last_error.clone() },
             "os_mode": self.mode,
             "hyper": self.hyper,
@@ -744,7 +753,7 @@ impl Engine {
             "base": self.base,
             "layers": self.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible, "leds": leds_json(&l.leds) })).collect::<Vec<_>>(),
             "side": self.side,
-            "frame": (0..KEY_LEDS).map(|l| frame.get(&l).copied().unwrap_or(OFF)).collect::<Vec<_>>(),
+            "frame": (0..self.layout().key_leds()).map(|l| frame.get(&l).copied().unwrap_or(OFF)).collect::<Vec<_>>(),
             "preview": self.preview.is_some(),
             "writes": self.writes,
         })
@@ -753,7 +762,7 @@ impl Engine {
 
 fn parse_leds(v: &Value) -> Leds {
     v.as_object()
-        .map(|o| o.iter().filter_map(|(k, c)| Some((k.parse::<u8>().ok().filter(|l| *l < KEY_LEDS)?, rgb(Some(c), OFF)))).collect())
+        .map(|o| o.iter().filter_map(|(k, c)| Some((k.parse::<u8>().ok().filter(|l| *l < MAX_KEY_LEDS)?, rgb(Some(c), OFF)))).collect())
         .unwrap_or_default()
 }
 
