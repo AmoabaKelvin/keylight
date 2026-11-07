@@ -81,6 +81,19 @@ How it was derived:
   inferred from those defaults [guess; verify with the key tester, which should report row 6 col 0/1 if the encoder is reported at all].
 - Key-event reports (`C1 row col pressed`) use the same `row*16+col` index [code D ~87860].
 
+**ISO (PID 0x102A) and JIS (0x1029)** [code, not checked on hardware]. Same 6x16 matrix and 98-word layers. Their maps
+(`ISO_MATRIX` / `JIS_MATRIX` in `src/lib/boards.ts`, geometry in `layout.ts`) come from running the same matching on NuPhy IO's
+Air75V3ISO / Air75V3JIS layout arrays and the stock keymaps in its virtual device data (chunks 820 and 291); every key matches
+with 0 mismatches. Ids name the usage a key sends, so a key keeps its id across layouts.
+- ISO: Enter at index 45 (LED 43, lit from the Tab row), the key left of it sends Backslash at 61 (LED 57), and the extra key
+  `nubs` (0x64) at 65 (LED 60); every LED after left Shift is one higher than ANSI. 84 keys, LEDs 0-83.
+- JIS: `yen` 29 (LED 28), 1u Backspace 30, Enter 45, `nuhs` (0x32, printed `]`) 61, `ro` 76, right Shift 77, and a bottom row
+  of `mhen` 83, space 85, `henk` 88, `kana` 89, Fn 90, Ctrl 91, arrows 92/94/95. No Right ⌘. 87 keys, LEDs 0-86.
+- NuPhy's feature config says 83 key LEDs for ISO and 87 for JIS, but its own ISO colour table holds 85 key-pattern colours, so
+  83 looks like a typo; Keylight paints 84 on ISO (one per key) and 87 on JIS. ANSI keeps painting its spare LED 83.
+- Stock words: NuPhy's ISO/JIS default where it differs from its ANSI default for the same key (ISO's Fn1 lighting keys sit one
+  key left, JIS puts MO(n) on Fn), else the ANSI firmware 1.0.23.6 word.
+
 ---
 
 ## 3. Stock keymaps (firmware 1.0.23.6) [fw]

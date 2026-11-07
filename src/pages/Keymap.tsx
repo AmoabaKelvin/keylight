@@ -6,8 +6,9 @@ import { Page, Tip } from '../components/Page'
 import { Segmented } from '../components/controls'
 import { backupOnce, daemon } from '../lib/api'
 import { OFF, type RGB } from '../lib/color'
-import { decode, DEFAULT_LAYERS, KEYCODES, KNOB_IDS, layerOf, macroCode, MATRIX, matrixIndex, offeredIn, TRANSPARENT, type KeyCode } from '../lib/keycodes'
-import { BY_ID, KEY_LEDS, keyName } from '../lib/layout'
+import { decode, KEYCODES, KNOB_IDS, layerOf, macroCode, offeredIn, TRANSPARENT, type KeyCode } from '../lib/keycodes'
+import { keyName } from '../lib/layout'
+import { useLayout } from '../lib/useLayout'
 import { macroName, macroTitle } from '../lib/macros'
 
 type Layer = { keys: number[]; defaults: number[] }
@@ -44,6 +45,8 @@ type Assign = { os: 0 | 1; id: number }
 
 export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: Ctx; assign?: Assign | null; onAssignEnd?: () => void; onBack?: () => void }) {
   const { state } = ctx
+  const { matrix: MATRIX, defaults: DEFAULT_LAYERS, byId: BY_ID, keyLeds: KEY_LEDS } = useLayout()
+  const matrixIndex = (id: string) => MATRIX.indexOf(id)
   const [os, setOs] = useState<0 | 1>(target ? target.os : state.device.os === 'windows' ? 1 : 0)
   const label = (w: number) => (w >> 8 === 0x77 && (w & 0xff) < 32 ? { ...decode(w >> 8, w & 0xff), name: macroName(os, w & 0xff) ? `Macro ${(w & 0xff) + 1}, ${macroName(os, w & 0xff)}` : `Macro ${(w & 0xff) + 1}` } : { ...decode(w >> 8, w & 0xff), ...MAC_NAMES[w] })
   const [sub, setSub] = useState<0 | 1 | 2 | 3>(0)
@@ -85,7 +88,7 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
         setError(String(e))
       }
     },
-    [state.connected],
+    [state.connected, DEFAULT_LAYERS],
   )
 
   useEffect(() => {
@@ -168,7 +171,7 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
   if (selected) rings[selected] = 'var(--text)'
 
   // A plain board, so legends read clearly; the selected and changed keys glow.
-  const frame: RGB[] = useMemo(() => Array.from({ length: KEY_LEDS }, () => OFF), [])
+  const frame: RGB[] = useMemo(() => Array.from({ length: KEY_LEDS }, () => OFF), [KEY_LEDS])
 
   const choices = useMemo(() => {
     const q = query.trim().toLowerCase()

@@ -4,7 +4,8 @@ import { Keyboard } from '../components/Keyboard'
 import { Page, Tip } from '../components/Page'
 import { Row, Swatches } from '../components/controls'
 import { hyperFrame } from '../lib/compose'
-import { BY_ID, keyName } from '../lib/layout'
+import { keyName } from '../lib/layout'
+import { useLayout } from '../lib/useLayout'
 
 /** Short labels that fit on a keycap, for the Tinycast actions we know. */
 const SHORT: Record<string, string> = {
@@ -27,6 +28,8 @@ function short(action: string) {
 
 export function HyperPage({ ctx }: { ctx: Ctx }) {
   const { state, send } = ctx
+  const board = useLayout()
+  const BY_ID = board.byId
   const [showing, setShowing] = useState(false)
   const timer = useRef<number | null>(null)
 
@@ -75,7 +78,10 @@ export function HyperPage({ ctx }: { ctx: Ctx }) {
             <span className="live-dot" /> Hyper is held right now
           </span>
         ) : (
-          <>Hold Right ⌘ and only the keys you use with Hyper light up. Click keys to add or remove them; Tinycast shortcuts are found by themselves.</>
+          <>
+            {board.hyperKey ? 'Hold Right ⌘' : 'Hold Hyper'} and only the keys you use with Hyper light up. Click keys to add or remove them; Tinycast shortcuts are found by themselves.
+            {!board.hyperKey && ' Karabiner’s Hyper rule listens for Right ⌘, which the JIS board doesn’t have, so remap a key to Right ⌘ first.'}
+          </>
         )
       }
       state={state}
@@ -86,7 +92,7 @@ export function HyperPage({ ctx }: { ctx: Ctx }) {
       }
       board={
         <Keyboard
-          frame={hyperFrame(state)}
+          frame={hyperFrame(state, board)}
           focus={new Set([...keys, 'rcmd'])}
           badges={badges}
           onKeyDown={(k) => toggleKey(k.id)}

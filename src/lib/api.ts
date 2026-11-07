@@ -33,6 +33,10 @@ export type DaemonState = {
   device: { name?: string; firmware?: string | null; link?: 'cable' | 'dongle'; layout?: 'ansi' | 'iso' | 'jis' | 'unknown'; os?: 'mac' | 'windows'; sleep?: Sleep }
   /** Why it isn't connected: "bluetooth", "unplugged", or a message. */
   error: string | null
+  /** The layout everything is drawn and mapped for: the override, else the board plugged in, else the last one seen. */
+  layout?: 'ansi' | 'iso' | 'jis'
+  /** Set on the Device page when detection is wrong; null = follow the keyboard. */
+  layout_override?: 'ansi' | 'iso' | 'jis' | null
   os_mode: number
   hyper: boolean
   hyper_keys: string[]

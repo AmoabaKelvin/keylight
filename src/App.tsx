@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import type { DaemonState } from './lib/api'
 import { css } from './lib/color'
 import { useDaemon } from './lib/useDaemon'
+import { boardFor, LayoutContext } from './lib/useLayout'
 import { DevicePage } from './pages/Device'
 import { HyperPage } from './pages/Hyper'
 import { KeymapPage } from './pages/Keymap'
@@ -92,28 +93,32 @@ export default function App() {
       <main className="main">
         <div className="toolbar" data-tauri-drag-region />
         <div className="scroll">
-          {!ctx ? null : page === 'lighting' ? (
-            <LightingPage ctx={ctx} />
-          ) : page === 'shapes' ? (
-            <ShapesPage ctx={ctx} />
-          ) : page === 'side' ? (
-            <SidePage ctx={ctx} />
-          ) : page === 'keymap' ? (
-            <KeymapPage ctx={ctx} assign={assign} onAssignEnd={() => setAssign(null)} onBack={() => setPage('macros')} />
-          ) : page === 'macros' ? (
-            <MacrosPage
-              ctx={ctx}
-              onAssign={(os, id) => {
-                setAssign({ os, id })
-                setPage('keymap')
-              }}
-            />
-          ) : page === 'hyper' ? (
-            <HyperPage ctx={ctx} />
-          ) : page === 'keys' ? (
-            <KeysPage ctx={ctx} />
-          ) : (
-            <DevicePage ctx={ctx} />
+          {ctx && (
+            <LayoutContext value={boardFor(ctx.state)}>
+              {page === 'lighting' ? (
+                <LightingPage ctx={ctx} />
+              ) : page === 'shapes' ? (
+                <ShapesPage ctx={ctx} />
+              ) : page === 'side' ? (
+                <SidePage ctx={ctx} />
+              ) : page === 'keymap' ? (
+                <KeymapPage ctx={ctx} assign={assign} onAssignEnd={() => setAssign(null)} onBack={() => setPage('macros')} />
+              ) : page === 'macros' ? (
+                <MacrosPage
+                  ctx={ctx}
+                  onAssign={(os, id) => {
+                    setAssign({ os, id })
+                    setPage('keymap')
+                  }}
+                />
+              ) : page === 'hyper' ? (
+                <HyperPage ctx={ctx} />
+              ) : page === 'keys' ? (
+                <KeysPage ctx={ctx} />
+              ) : (
+                <DevicePage ctx={ctx} />
+              )}
+            </LayoutContext>
           )}
         </div>
       </main>

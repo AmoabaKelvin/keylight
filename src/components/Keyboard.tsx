@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { useState, type ReactNode } from 'react'
+import { useState, type ReactNode, type SVGProps } from 'react'
 import { glow, type RGB } from '../lib/color'
-import { ACCENT, HEIGHT, KEYS, KNOB, WIDTH, type Key } from '../lib/layout'
+import { ACCENT, HEIGHT, KNOB, WIDTH, type Key } from '../lib/layout'
+import { useLayout } from '../lib/useLayout'
 import { KeyIcon } from './icons'
 
 const U = 60 // px per key unit in the drawing
@@ -39,9 +40,10 @@ type Props = {
   tip?: (key: Key) => ReactNode
 }
 
-/** The Air75 V3, drawn to scale with what each LED is showing. */
+/** The Air75 V3 in the current layout (useLayout), drawn to scale with what each LED is showing. */
 export function Keyboard({ frame, side, focus, rings, badges, sideFocus, painting, motion: anim, legends, onKeyDown, onKeyEnter, tip }: Props) {
   const [hover, setHover] = useState<Key | null>(null)
+  const { keys: KEYS, name } = useLayout()
 
   const sideGlow = side && side.mode !== 4 ? glow(side.color.map((v) => (v * side.brightness) / 100)) : null
   const breathe = side?.mode === 3
@@ -75,7 +77,7 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
       style={anim ? ({ '--anim': `${anim.seconds}s` } as React.CSSProperties) : undefined}
       onPointerLeave={() => setHover(null)}
     >
-      <svg viewBox={`0 0 ${W} ${H}`} className="kb-svg" role="img" aria-label="Air75 V3">
+      <svg viewBox={`0 0 ${W} ${H}`} className="kb-svg" role="img" aria-label={`Air75 V3 ${name}`}>
         <defs>
           <filter id="kb-bloom" x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur stdDeviation="9" />
@@ -118,13 +120,15 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
             const g = glow(frame[k.led] ?? [0, 0, 0])
             const dim = focus && !focus.has(k.id)
             return (
-              <rect
+              <Outline
                 key={k.id}
+                of={k}
+                unit={U}
                 x={PAD_X + k.x * U}
                 y={PAD_Y + k.y * U}
-                width={k.w * U}
-                height={U}
-                rx={12}
+                w={k.w * U}
+                h={(k.h ?? 1) * U}
+                r={12}
                 className="bloom"
                 style={{ fill: g.color, opacity: g.strength * (dim ? 0.25 : 1), ...phase(k) }}
               />
@@ -140,13 +144,18 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
           const x = PAD_X + k.x * U + GAP
           const y = PAD_Y + k.y * U + GAP
           const w = k.w * U - GAP * 2
-          const h = U - GAP * 2
+          const h = U - GAP * 2 // the legend row; ISO Enter's lower part hangs below it
+          const full = (k.h ?? 1) * U - GAP * 2
+          const shape = { of: k, unit: U, x, y, w, h: full }
+          const inset = { ...shape, x: x + 4, y: y + 3, w: w - 8, h: full - 10 }
+          const outer = { ...shape, x: x - 1.5, y: y - 1.5, w: w + 3, h: full + 3 }
           const cx = x + w / 2
           const dim = focus && !focus.has(k.id)
           const ring = rings?.[k.id]
           const badge = badges?.[k.id]
           const lit = g.strength > 0.04
-          const words = (k.label.length > 2 && !/^F\d+$/.test(k.label)) || (!!legend && k.label.length > 1)
+          // Words get the small caps size; so do two-glyph kanji like 変換, which are as wide as a word.
+          const words = (k.label.length > 2 && !/^F\d+$/.test(k.label)) || (!!legend && k.label.length > 1) || /[^\x00-\x7f]{2}/.test(k.label)
           const inkColor = lit ? g.color : 'var(--kb-legend)'
           const iconOnly = !!k.icon && !k.label
           const accent = ACCENT[k.id]
@@ -163,10 +172,10 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
                 onKeyEnter?.(key, e)
               }}
             >
-              <rect x={x} y={y} width={w} height={h} rx={8} className="cap" fill="url(#kb-cap)" />
-              {accent && <rect x={x} y={y} width={w} height={h} rx={8} style={{ fill: accent, opacity: lit ? 0.16 : 0.28 }} />}
-              <rect x={x} y={y} width={w} height={h} rx={8} className="tint" style={{ fill: g.color, opacity: lit ? 0.04 + g.strength * 0.08 : 0 }} />
-              <rect x={x + 4} y={y + 3} width={w - 8} height={h - 10} rx={6} className="face" />
+              <Outline {...shape} r={8} className="cap" fill="url(#kb-cap)" />
+              {accent && <Outline {...shape} r={8} style={{ fill: accent, opacity: lit ? 0.16 : 0.28 }} />}
+              <Outline {...shape} r={8} className="tint" style={{ fill: g.color, opacity: lit ? 0.04 + g.strength * 0.08 : 0 }} />
+              <Outline {...inset} r={6} className="face" />
               {twoLine && (
                 <text x={cx} y={y + 21} className="legend sub" style={ink}>
                   {k.sub}
@@ -187,14 +196,11 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
                   {badge}
                 </text>
               )}
-              {ring && <rect x={x - 1.5} y={y - 1.5} width={w + 3} height={h + 3} rx={9.5} className="ring" style={{ stroke: ring }} />}
+              {ring && <Outline {...outer} r={9.5} className="ring" style={{ stroke: ring }} />}
               {painting && hover?.id === k.id && (
-                <rect
-                  x={x - 1.5}
-                  y={y - 1.5}
-                  width={w + 3}
-                  height={h + 3}
-                  rx={9.5}
+                <Outline
+                  {...outer}
+                  r={9.5}
                   className="ring brush"
                   style={{ stroke: painting.color ? glow(painting.color).color : 'var(--muted)', strokeDasharray: painting.color ? undefined : '4 4' }}
                 />
@@ -233,6 +239,37 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
   )
 }
 
+type OutlineProps = { of: Key; unit: number; x: number; y: number; w: number; h: number; r: number } & Omit<SVGProps<SVGPathElement>, 'x' | 'y' | 'r'>
+
+/**
+ * A keycap's outline at (x, y), w by h: a rounded rectangle, or for a tall key (ISO Enter) an
+ * upside-down L whose lower part is `k.w2` wide and flush right. Insets carry over: the lower part
+ * loses as much width as the top does.
+ */
+function Outline({ of: k, unit, x, y, w, h, r, ...rest }: OutlineProps) {
+  if (!k.h || !k.w2) return <rect x={x} y={y} width={w} height={h} rx={r} {...(rest as SVGProps<SVGRectElement>)} />
+  const lower = w - (k.w - k.w2) * unit
+  const top = h - (k.h - 1) * unit
+  return <path d={rounded([[x, y], [x + w, y], [x + w, y + h], [x + w - lower, y + h], [x + w - lower, y + top], [x, y + top]], r)} {...rest} />
+}
+
+/** A closed path through the points with each corner rounded off by r (concave ones too). */
+function rounded(points: [number, number][], r: number) {
+  const n = points.length
+  const toward = ([ax, ay]: number[], [bx, by]: number[]) => {
+    const d = Math.hypot(bx - ax, by - ay)
+    const t = Math.min(r, d / 2) / d
+    return [ax + (bx - ax) * t, ay + (by - ay) * t]
+  }
+  let d = ''
+  points.forEach((p, i) => {
+    const a = toward(p, points[(i + n - 1) % n])
+    const b = toward(p, points[(i + 1) % n])
+    d += `${i ? 'L' : 'M'}${a[0]} ${a[1]}Q${p[0]} ${p[1]} ${b[0]} ${b[1]}`
+  })
+  return d + 'Z'
+}
+
 /** Where in an animation cycle each key sits, for the CSS that hints at keyboard effects. */
 function phase(k: Key) {
   return { '--x': (k.x + k.w / 2) / WIDTH, '--y': k.y / (HEIGHT - 1), '--r': ((k.led * 37) % 23) / 23 } as React.CSSProperties
@@ -240,6 +277,7 @@ function phase(k: Key) {
 
 /** A thumbnail of a set of LEDs, for lists and the preset gallery. */
 export function MiniBoard({ leds, base }: { leds: Record<string, RGB>; base?: RGB[] }) {
+  const { keys: KEYS } = useLayout()
   const u = 10
   return (
     <svg viewBox={`0 0 ${WIDTH * u + 8} ${HEIGHT * u + 8}`} className="mini">
@@ -247,13 +285,15 @@ export function MiniBoard({ leds, base }: { leds: Record<string, RGB>; base?: RG
         const c = leds[k.led] ?? base?.[k.led]
         const g = c ? glow(c) : null
         return (
-          <rect
+          <Outline
             key={k.id}
+            of={k}
+            unit={u}
             x={4 + k.x * u + 1}
             y={4 + k.y * u + 1}
-            width={k.w * u - 2}
-            height={u - 2}
-            rx={2}
+            w={k.w * u - 2}
+            h={(k.h ?? 1) * u - 2}
+            r={2}
             style={g && g.strength > 0 ? { fill: g.color, opacity: 0.35 + g.strength * 0.65 } : undefined}
             className={g && g.strength > 0 ? 'on' : 'off'}
           />

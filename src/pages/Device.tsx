@@ -9,6 +9,8 @@ import { Segmented } from '../components/controls'
 
 type Func = { stabilization: number; disable_win: boolean; disable_alt_f4: boolean; disable_alt_tab: boolean }
 import { useThrottle } from '../lib/useDaemon'
+import { BOARDS, isLayout, type LayoutId } from '../lib/layout'
+import { useLayout } from '../lib/useLayout'
 
 export function DevicePage({ ctx }: { ctx: Ctx }) {
   const { state, send } = ctx
@@ -25,6 +27,14 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
   useEffect(() => void autostart().then(setLogin).catch(() => {}), [])
   const d = state.device
   const sleep = d.sleep
+  const board = useLayout()
+  const detected = isLayout(d.layout) ? d.layout : null
+  const override = state.layout_override ?? null
+  const setLayout = (v: LayoutId | 'auto') => {
+    const layout_override = v === 'auto' ? null : v
+    const layout = layout_override ?? detected ?? state.layout
+    send({ op: 'layout', layout: layout_override }, (s) => ({ ...s, layout_override, layout }))
+  }
 
   const setSleep = (patch: Partial<Sleep>) =>
     send({ op: 'sleep', ...patch }, (s) => ({ ...s, device: { ...s.device, sleep: s.device.sleep && { ...s.device.sleep, ...patch } } }))
@@ -49,9 +59,29 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
             <dt>Mode</dt>
             <dd>{d.os === 'windows' ? 'Windows' : 'Mac'}</dd>
             <dt>Layout</dt>
-            <dd>{d.layout === 'iso' ? 'ISO (drawn here as ANSI)' : d.layout === 'jis' ? 'JIS (drawn here as ANSI)' : 'ANSI'}</dd>
+            <dd>{detected ? BOARDS[detected].name : 'Unknown'}</dd>
           </dl>
         )}
+      </Row>
+
+      <Row
+        icon="keyboard"
+        title="Layout"
+        aside={
+          <Segmented
+            value={override ?? 'auto'}
+            options={[{ value: 'auto', label: 'Auto' }, ...Object.values(BOARDS).map((b) => ({ value: b.id, label: b.name }))]}
+            onChange={setLayout}
+          />
+        }
+      >
+        <p className="row-help">
+          {override
+            ? `Drawn and mapped as ${board.name}, whatever the keyboard reports${detected && detected !== override ? ` (it says ${BOARDS[detected].name})` : ''}. Choose Auto to follow the keyboard again.`
+            : state.connected && detected
+              ? `${board.name}, as the keyboard reports it. If the keys on screen don’t match yours, pick your layout here.`
+              : `Drawn as ${board.name}${state.layout && !state.connected ? ', the last layout Keylight saw' : ''}. Keylight picks the layout up from the keyboard when it’s plugged in.`}
+        </p>
       </Row>
 
       <Row icon="moon" title="Sleep" aside={sleep && <Toggle on={sleep.enabled} onChange={(enabled) => setSleep({ enabled })} label="Auto-sleep" />}>

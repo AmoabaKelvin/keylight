@@ -6,8 +6,8 @@ import { Page, Tip } from '../components/Page'
 import { Segmented, Toggle } from '../components/controls'
 import { backupOnce, daemon } from '../lib/api'
 import { OFF, type RGB } from '../lib/color'
-import { MATRIX } from '../lib/keycodes'
-import { BY_ID, KEY_LEDS, keyName } from '../lib/layout'
+import { keyName, type Board } from '../lib/layout'
+import { useLayout } from '../lib/useLayout'
 import {
   CAPACITY,
   codeFromEvent,
@@ -55,8 +55,8 @@ const GROUPS: { id: string; label: string; categories: string[] }[] = [
   { id: 'more', label: 'More', categories: ['keypad', 'international'] },
 ]
 
-const where = (b: Binding) => {
-  const key = b.id === 'knob-left' ? 'Knob, turned left' : b.id === 'knob-right' ? 'Knob, turned right' : b.id === 'knob-press' ? 'Knob press' : keyName(BY_ID.get(b.id)!)
+const where = (b: Binding, board: Board) => {
+  const key = b.id === 'knob-left' ? 'Knob, turned left' : b.id === 'knob-right' ? 'Knob, turned right' : b.id === 'knob-press' ? 'Knob press' : keyName(board.byId.get(b.id)!)
   return b.sub === 0 ? key : `${key} (${SUBS[b.sub]})`
 }
 
@@ -71,6 +71,8 @@ function stuck(m: Macro): number[] {
 
 export function MacrosPage({ ctx, onAssign }: { ctx: Ctx; onAssign: (os: Os, id: number) => void }) {
   const { state } = ctx
+  const board = useLayout()
+  const { matrix: MATRIX, byId: BY_ID, keyLeds: KEY_LEDS } = board
   const [os, setOs] = useState<Os>(memory.os ?? (state.device.os === 'windows' ? 1 : 0))
   const [selected, setSelected] = useState(memory.selected)
   const [areas, setAreas] = useState(memory.areas)
@@ -125,7 +127,7 @@ export function MacrosPage({ ctx, onAssign }: { ctx: Ctx; onAssign: (os: Os, id:
         // The macros still load; the board just can't show where they're bound.
       }
     },
-    [state.connected],
+    [state.connected, MATRIX],
   )
 
   // Read on each visit, unless that would throw away unsaved edits kept from the last one.
@@ -336,7 +338,7 @@ export function MacrosPage({ ctx, onAssign }: { ctx: Ctx; onAssign: (os: Os, id:
       }),
     )
     return { frame, legends, rings, focus: focus.size ? focus : undefined }
-  }, [bound, selected])
+  }, [bound, selected, BY_ID, KEY_LEDS])
 
   const keyMacros = (id: string) => (bound ?? []).flatMap((list, m) => list.filter((b) => b.id === id).map((b) => ({ m, sub: b.sub })))
 
@@ -433,7 +435,7 @@ export function MacrosPage({ ctx, onAssign }: { ctx: Ctx; onAssign: (os: Os, id:
                   <span className="macro-slot-head">
                     <span className="macro-slot-id">M{id + 1}</span>
                     {dirty[id] && <span className="macro-dirty" title="Not saved yet" />}
-                    {on.length > 0 && <span className="macro-slot-key">{legendFor(on[0])}</span>}
+                    {on.length > 0 && <span className="macro-slot-key">{legendFor(on[0], board)}</span>}
                   </span>
                   <span className="macro-slot-name">{name || (m.length ? `${m.length} actions` : 'Empty')}</span>
                 </button>
@@ -480,7 +482,7 @@ export function MacrosPage({ ctx, onAssign }: { ctx: Ctx; onAssign: (os: Os, id:
                   {macro.length} {macro.length === 1 ? 'action' : 'actions'} · plays in {seconds(duration(macro))} ·{' '}
                 </>
               ) : null}
-              {mine.length ? <>On {mine.map(where).join(', ')}</> : 'Not on a key yet'}
+              {mine.length ? <>On {mine.map((b) => where(b, board)).join(', ')}</> : 'Not on a key yet'}
             </p>
 
             <AnimatePresence initial={false}>
@@ -673,8 +675,8 @@ export function MacrosPage({ ctx, onAssign }: { ctx: Ctx; onAssign: (os: Os, id:
   )
 }
 
-function legendFor(b: Binding) {
-  const key = BY_ID.get(b.id)
+function legendFor(b: Binding, board: Board) {
+  const key = board.byId.get(b.id)
   if (!key) return b.id.startsWith('knob') ? 'Knob' : ''
   return (key.label || keyName(key)).slice(0, 6)
 }

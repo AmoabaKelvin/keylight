@@ -7,12 +7,14 @@ import { Row, Swatches, Toggle } from '../components/controls'
 import type { Layer } from '../lib/api'
 import { colorName, same, type RGB } from '../lib/color'
 import { compose } from '../lib/compose'
-import { KEY_LEDS, keyName, mirror, type Key } from '../lib/layout'
+import { keyName, mirror, type Key } from '../lib/layout'
 import { PRESETS, uniqueName, type Leds, type Preset } from '../lib/shapes'
 import { useThrottle } from '../lib/useDaemon'
+import { useLayout } from '../lib/useLayout'
 
 export function ShapesPage({ ctx }: { ctx: Ctx }) {
   const { state, send, pause } = ctx
+  const board = useLayout()
   const [editing, setEditing] = useState<string | null>(null)
   /** The shape being edited, as drawn here; the daemon catches up a few times a second. */
   const [draft, setDraft] = useState<Leds | null>(null)
@@ -26,7 +28,7 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
     () => state.layers.map((l) => (l.name === editing && draft ? { ...l, leds: draft, visible: true } : l)),
     [state.layers, editing, draft],
   )
-  const frame = state.hyper ? state.frame : compose(state.base, layers)
+  const frame = state.hyper ? state.frame : compose(state.base, layers, board)
 
   const push = useThrottle((name: string, leds: Leds) => send({ op: 'layer', name, leds }), 70)
 
@@ -65,7 +67,7 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
   const paint = (k: Key) => {
     if (!editing || !draft || !stroke.current) return
     const next = { ...draft }
-    for (const key of symmetric ? [k, mirror(k)] : [k]) {
+    for (const key of symmetric ? [k, mirror(k, board.keys)] : [k]) {
       if (stroke.current.erase) delete next[key.led]
       else next[key.led] = brush!
     }
@@ -112,7 +114,7 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
       return
     }
     // Only after a short rest, so sweeping the mouse across the gallery doesn't flood the keyboard.
-    previewTimer.current = window.setTimeout(() => send({ op: 'preview', leds: p.build() }), 350)
+    previewTimer.current = window.setTimeout(() => send({ op: 'preview', leds: p.build(board) }), 350)
   }
 
   const whoLights = (k: Key) => {
@@ -160,7 +162,7 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
               <p className="row-help">Paint the matching key on the other half too, so the shape stays symmetric.</p>
             </Row>
             <div className="row-actions inline">
-              <button className="button" onClick={() => brush && setAll(Object.fromEntries(Array.from({ length: KEY_LEDS }, (_, i) => [i, brush])))}>
+              <button className="button" onClick={() => brush && setAll(Object.fromEntries(Array.from({ length: board.keyLeds }, (_, i) => [i, brush])))}>
                 Fill every key
               </button>
               <button className="button" onClick={() => setAll({})}>
@@ -247,8 +249,8 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
       </h2>
       <div className="presets">
         {PRESETS.map((p) => (
-          <button key={p.id} className="preset" onPointerEnter={() => previewPreset(p)} onPointerLeave={() => previewPreset(null)} onClick={() => addLayer(p.name, p.build())}>
-            <MiniBoard leds={p.build()} />
+          <button key={p.id} className="preset" onPointerEnter={() => previewPreset(p)} onPointerLeave={() => previewPreset(null)} onClick={() => addLayer(p.name, p.build(board))}>
+            <MiniBoard leds={p.build(board)} />
             <span className="preset-name">{p.name}</span>
             <span className="preset-hint">{p.hint}</span>
           </button>
