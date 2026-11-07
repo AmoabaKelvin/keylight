@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import type { DaemonState } from './lib/api'
 import { css } from './lib/color'
 import { useDaemon } from './lib/useDaemon'
+import { AdvancedPage, type AdvancedFocus } from './pages/Advanced'
 import { DevicePage } from './pages/Device'
 import { HyperPage } from './pages/Hyper'
 import { KeymapPage } from './pages/Keymap'
@@ -24,6 +25,7 @@ const PAGES = [
   { id: 'side', label: 'Side lights' },
   { id: 'keymap', label: 'Keymap' },
   { id: 'macros', label: 'Macros' },
+  { id: 'advanced', label: 'Advanced keys' },
   { id: 'hyper', label: 'Hyper' },
   { id: 'keys', label: 'Karabiner' },
   { id: 'device', label: 'Device' },
@@ -38,6 +40,8 @@ export default function App() {
   const [page, setPage] = useState<PageId>(() => (localStorage.getItem('page') as PageId) || 'lighting')
   /** A macro on its way from the Macros page to a key on the Keymap page. */
   const [assign, setAssign] = useState<{ os: 0 | 1; id: number } | null>(null)
+  /** An advanced key on its way from the Keymap page to its editor. */
+  const [advanced, setAdvanced] = useState<AdvancedFocus | null>(null)
 
   useEffect(() => {
     localStorage.setItem('page', page)
@@ -99,7 +103,16 @@ export default function App() {
           ) : page === 'side' ? (
             <SidePage ctx={ctx} />
           ) : page === 'keymap' ? (
-            <KeymapPage ctx={ctx} assign={assign} onAssignEnd={() => setAssign(null)} onBack={() => setPage('macros')} />
+            <KeymapPage
+              ctx={ctx}
+              assign={assign}
+              onAssignEnd={() => setAssign(null)}
+              onBack={() => setPage('macros')}
+              onEditAdvanced={(f) => {
+                setAdvanced(f)
+                setPage('advanced')
+              }}
+            />
           ) : page === 'macros' ? (
             <MacrosPage
               ctx={ctx}
@@ -108,6 +121,8 @@ export default function App() {
                 setPage('keymap')
               }}
             />
+          ) : page === 'advanced' ? (
+            <AdvancedPage ctx={ctx} focus={advanced} onFocusEnd={() => setAdvanced(null)} />
           ) : page === 'hyper' ? (
             <HyperPage ctx={ctx} />
           ) : page === 'keys' ? (

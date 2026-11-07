@@ -13,6 +13,7 @@ Website: [nuphy.kelvinamoaba.com](https://nuphy.kelvinamoaba.com)
 - **Side lights.** Static, breathe, neon or off, in any colour.
 - **Keymap.** Remap any key on any of the eight layers, four for Mac mode and four for Windows. The knob's left turn, right turn and press are keys too. Keylight backs up your whole keymap before the first change.
 - **Macros.** Record a macro by typing it, or build it key by key, for each of the 32 slots in Mac and Windows mode. Name them, see which keys play them, and put one on a key in two clicks. Keylight backs up your keymap and macros before the first change.
+- **Advanced keys.** SOCD pairs (hold A and D, pick which one types), Tap Dance (a tap, a double tap and a hold on one key) and Toggle (tap to switch a layer or key on, tap again to switch it off). Click a key on the board to make one.
 - **Hyper highlighting.** Hold Right ⌘ and only the keys you've bound to Hyper shortcuts light up. Click keys to mark them. If you use Tinycast, Keylight reads its Hyper shortcuts for you.
 - **Karabiner setup.** One click adds three Karabiner-Elements rules: Right ⌘ as Hyper, Caps Lock as Control with a double-tap for Caps Lock, and both Shifts together for Caps Lock.
 - **Device settings.** Auto-sleep timers, the typing filter against key chatter, and open at login. It also shows the firmware version and whether the keyboard is in Mac or Windows mode.
@@ -92,9 +93,9 @@ echo '{"op":"state"}' | nc -U ~/Library/Application\ Support/Keylight/keylight.s
 
 Keylight writes to your keyboard's memory, so it limits what it can send:
 
-- **An allowlist of 15 commands.** Every packet goes through one function, and it refuses any command not on the list. The list covers device info, lighting, per-key colour, keymap, macros, typing and sleep settings, and the session handshake. See `ALLOWED` in [`src-tauri/src/hid.rs`](src-tauri/src/hid.rs).
-- **Never bootloader, reset or wipe.** Firmware update mode `0xEF`, factory reset `0xF1`, and the keymap and advanced-key wipes `0xB4`, `0xB7`, `0xBA` and `0xBD` are not on the list, so Keylight can't send them.
-- **Keymap backup before the first write.** Before it changes a key, Keylight saves all eight layers and both macro banks to `~/Library/Application Support/Keylight/backups/`.
+- **An allowlist of 21 commands.** Every packet goes through one function, and it refuses any command not on the list. The list covers device info, lighting, per-key colour, keymap, macros, the SOCD, Tap Dance and Toggle tables, typing and sleep settings, and the session handshake. See `ALLOWED` in [`src-tauri/src/hid.rs`](src-tauri/src/hid.rs).
+- **Never bootloader, reset or wipe.** Firmware update mode `0xEF`, factory reset `0xF1`, and the keymap and advanced-key wipes `0xB4`, `0xB7`, `0xBA` and `0xBD` are not on the list, so Keylight can't send them. It writes advanced keys one entry at a time, and clears an unused entry by writing zeros.
+- **Keymap backup before the first write.** Before it changes a key, Keylight saves all eight layers, both macro banks and the three advanced-key tables to `~/Library/Application Support/Keylight/backups/`.
 - **Karabiner backup.** The first time Keylight edits `karabiner.json`, it copies the original to `karabiner.json.keylight-backup` next to it.
 - **Few writes.** Lighting changes send only the keys that changed. Keylight doesn't animate anything in software, because I don't know whether the keyboard saves every write to flash.
 
@@ -111,7 +112,6 @@ NuPhy doesn't publish the protocol. I worked it out from NuPhy IO, NuPhy's web c
 
 - An in-app firmware updater
 - Research into custom firmware
-- Editors for the advanced keys: SOCD, Tap Dance and Toggle
 - Support for more NuPhy boards
 - Signed and notarized releases
 

@@ -212,11 +212,14 @@ Read once at connect: 0xB5 SOCD (256 B), 0xB8 Tap Dance (512 B), 0xBB TGL (128 B
 - **SOCD** (a pair of keys, e.g. A/D): both keys get their own slot (allocated as the first two free slots), each slot stores the key's own
   output code, the partner's slot and a priority bit. Priority, decoded as `(myBit<<1) | partnerBit`: 0 = neutral ("No Priority": both
   pressed -> neither), 3 = last input wins, 2 = this key always wins, 1 = partner wins. Writing: bit = 1 for "OwnWin" or "LastWin". If one
-  key is set to absolute priority the other is forced to "BondWin" (bit 0). Consecutive ascending slots are written in one 8-byte packet.
+  key is set to absolute priority the other is forced to "BondWin" (bit 0). NuPhy IO always writes the pair as one 8-byte packet at
+  key A's slot, so when B's slot isn't A's + 1, B's entry lands in someone else's slot. Keylight writes each 4-byte entry at its own
+  address. The firmware keeps only the low byte of the output code, so only one-byte keys work.
   The UI shows the trigger rules as "Finally, enter the priority" / "No Priority" / "Absolute priority (key)" [mapping of labels to enum
   values is a guess from the wording].
 - **Tap Dance** (shown as "Tap Dance", icon ModTap): tap, double-tap and hold outputs, any wire keycode each, and a delay clamped to
-  **10-1000 ms** (`limitValue(a, 10, 1e3)`).
+  **10-1000 ms** (`limitValue(a, 10, 1e3)`). The firmware treats anything up to 100 ms as 100. Outputs can be one-byte keys, MO(n)
+  and NuPhy functions (0x7Exx); macros and other 16-bit codes aren't handled.
 - **TGL** (Toggle Key): tapping latches the key on/off, holding acts as a normal key. One keycode.
 - Slot allocation: a slot is "used" if some key in that mode's four layers references it (scanned at load); a new one takes the first unused
   slot, or reuses the slot already on the key. Write order: table entry first, then the key word (`setKey(..., [0x7F, id])`).
@@ -232,7 +235,7 @@ What NuPhy IO does [code D ~88969-89330, firmware FW 0x5F7E]:
 |---|---|
 | Reset one key (Key Bindings "Reset", also used when removing a macro/advanced key) | read the current word (0xB2); read the **default word with 0xB1 at `layer*196 + 2*index`**; write it with 0xB3 at the same address. Advanced-table entries are not cleared |
 | Restore a layer | 0xB4 with address = layer number, length = number of layers (1), data = zeros; then re-read the layer. The firmware handler copies the flash defaults (same getter as 0xB1) over layers `[addr, addr+len)` [fw] |
-| Reset a mode (Mode Settings "Reset") | 0xC3 zeros over that mode's 2048 B of macros; **0xB7 ResetSOCD and 0xBA ResetTapDance (whole tables, both modes [guess])**; TGL table untouched; 0xFC zeros over the 56-byte mode name; 0xB4(addr = 4*mode, len 4) |
+| Reset a mode (Mode Settings "Reset") | 0xC3 zeros over that mode's 2048 B of macros; **0xB7 ResetSOCD and 0xBA ResetTapDance** (the firmware expects a mode bitmask but gets a buffer pointer, so these are most likely no-ops [fw, medium]); TGL table untouched; 0xFC zeros over the 56-byte mode name; 0xB4(addr = 4*mode, len 4) |
 | Reset keyboard (Global settings) | macros zeroed for both modes, 0xB7, 0xBA, mode names zeroed, then **0xF1 RestoreFactory** |
 
 Recommended for Keylight:

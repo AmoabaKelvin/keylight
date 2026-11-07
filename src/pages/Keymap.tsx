@@ -4,11 +4,13 @@ import type { Ctx } from '../App'
 import { Keyboard } from '../components/Keyboard'
 import { Page, Tip } from '../components/Page'
 import { Segmented } from '../components/controls'
+import { advancedOf, apply, describeWord, planCleanup, readMode, readTables, socdAt, SLOTS, tapDanceAt, toggleAt, references, TYPE_NAMES, describeTapDance, describeToggle, type Os, type Tables } from '../lib/advanced'
 import { backupOnce, daemon } from '../lib/api'
 import { OFF, type RGB } from '../lib/color'
 import { decode, DEFAULT_LAYERS, KEYCODES, KNOB_IDS, layerOf, macroCode, MATRIX, matrixIndex, offeredIn, TRANSPARENT, type KeyCode } from '../lib/keycodes'
 import { BY_ID, KEY_LEDS, keyName } from '../lib/layout'
 import { macroName, macroTitle } from '../lib/macros'
+import type { AdvancedFocus } from './Advanced'
 
 type Layer = { keys: number[]; defaults: number[] }
 
@@ -30,6 +32,7 @@ const GROUPS: { id: string; label: string; categories: string[] }[] = [
   { id: 'wireless', label: 'Wireless', categories: ['connection'] },
   { id: 'more', label: 'More', categories: ['mouse', 'keypad', 'international', 'special'] },
   { id: 'macros', label: 'Macros', categories: [] },
+  { id: 'advanced', label: 'Advanced', categories: [] },
 ]
 
 /** The 32 macros of an OS mode, with the names given on the Macros page. */
@@ -42,10 +45,29 @@ const MAC_NAMES: Record<number, { label: string; name: string }> = {
 
 type Assign = { os: 0 | 1; id: number }
 
-export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: Ctx; assign?: Assign | null; onAssignEnd?: () => void; onBack?: () => void }) {
+export function KeymapPage({
+  ctx,
+  assign: target,
+  onAssignEnd,
+  onBack,
+  onEditAdvanced,
+}: {
+  ctx: Ctx
+  assign?: Assign | null
+  onAssignEnd?: () => void
+  onBack?: () => void
+  onEditAdvanced?: (f: AdvancedFocus) => void
+}) {
   const { state } = ctx
   const [os, setOs] = useState<0 | 1>(target ? target.os : state.device.os === 'windows' ? 1 : 0)
-  const label = (w: number) => (w >> 8 === 0x77 && (w & 0xff) < 32 ? { ...decode(w >> 8, w & 0xff), name: macroName(os, w & 0xff) ? `Macro ${(w & 0xff) + 1}, ${macroName(os, w & 0xff)}` : `Macro ${(w & 0xff) + 1}` } : { ...decode(w >> 8, w & 0xff), ...MAC_NAMES[w] })
+  /** The advanced-key tables, so SOCD, Tap Dance and Toggle keys can say what they do. */
+  const [tables, setTables] = useState<Tables | null>(null)
+  const label = (w: number) => {
+    const adv = describeWord(w, tables, os)
+    if (adv) return { ...decode(w >> 8, w & 0xff), label: adv.label, name: adv.name }
+    if (w >> 8 === 0x77 && (w & 0xff) < 32) return { ...decode(w >> 8, w & 0xff), name: macroName(os, w & 0xff) ? `Macro ${(w & 0xff) + 1}, ${macroName(os, w & 0xff)}` : `Macro ${(w & 0xff) + 1}` }
+    return { ...decode(w >> 8, w & 0xff), ...MAC_NAMES[w] }
+  }
   const [sub, setSub] = useState<0 | 1 | 2 | 3>(0)
   const [layers, setLayers] = useState<Record<number, Layer>>({})
   const [selected, setSelected] = useState<string | null>(null)
@@ -92,14 +114,31 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
     if (!layers[layer]) load(layer)
   }, [layer, layers, load])
 
+  useEffect(() => {
+    if (state.connected && !tables) readTables().then(setTables, () => {})
+  }, [state.connected, tables])
+
+  // The Advanced group lists this mode's Tap Dance and Toggle keys, which can sit on any of its layers.
+  useEffect(() => {
+    if (group === 'advanced') for (let l = os * 4; l < os * 4 + 4; l++) if (!layers[l]) load(l)
+  }, [group, os, layers, load])
+
   const index = selected ? matrixIndex(selected) : -1
   const current = index >= 0 ? data.keys[index] : null
   const original = index >= 0 ? data.defaults[index] : null
+  const currentAdv = current !== null ? advancedOf(current) : null
+  const isKnob = !!selected && (KNOB_IDS as readonly string[]).includes(selected)
 
   /** What would go wrong with this assignment, if anything; the user can still go ahead. */
   const warningFor = (code: number): string | null => {
     const k = KEYCODES.find((c) => c.code === code)
     if (k?.danger) return k.danger
+    const adv = current !== null ? advancedOf(current) : null
+    if (adv?.type === 'socd' && tables) {
+      const p = socdAt(tables, os, adv.slot)
+      const other = p.partner < SLOTS ? socdAt(tables, os, p.partner) : null
+      if (other && other.partner === adv.slot) return `This key is half of an SOCD pair. Its other key, ${label(other.code).label}, goes back to typing ${label(other.code).label} on its own.`
+    }
     const base = layers[layerOf(os, 0)]?.keys ?? DEFAULT_LAYERS[layerOf(os, 0)]
     const isLayerKey = (w: number) => w >= 0x5220 && w <= 0x523f
     if (sub === 0 && current !== null && isLayerKey(current) && !isLayerKey(code) && base.filter(isLayerKey).length <= 1)
@@ -120,6 +159,7 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
       if (!backup) setBackup(await backupOnce())
       await daemon({ op: 'key_set', layer, index, word: code })
       setLayers((ls) => ({ ...ls, [layer]: { ...ls[layer], keys: ls[layer].keys.map((w, i) => (i === index ? code : w)) } }))
+      if (current !== null && advancedOf(current)) await tidy([current])
       setError(null)
       if (target && code === macroCode(target.id) && selected) {
         setPlaced(`${macroTitle(target.os, target.id)} is on ${selected.startsWith('knob') ? 'the knob' : keyName(BY_ID.get(selected)!)}${sub ? ` (${LAYERS[sub].label} layer)` : ''}.`)
@@ -138,14 +178,35 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
     else write(code)
   }
 
+  /**
+   * Keys that held these advanced keys were just changed: clear the entries nothing uses now, and
+   * turn a lone SOCD partner back into a plain key (lib/advanced.ts, planCleanup).
+   */
+  const tidy = async (old: number[]) => {
+    const mode = await readMode(os as Os)
+    const ops = planCleanup(os as Os, mode, old)
+    const now = ops.length ? await apply(os as Os, ops) : mode
+    setTables(now.tables)
+    setLayers((ls) => {
+      const next = { ...ls }
+      now.layers.forEach((keys, sub) => (next[os * 4 + sub] = { keys, defaults: now.defaults[sub] }))
+      return next
+    })
+  }
+
   const resetLayer = async () => {
     if (!live) return
     setBusy(true)
     try {
       if (!backup) setBackup(await backupOnce())
+      const old: number[] = []
       for (let i = 0; i < live.keys.length; i++) {
-        if (live.keys[i] !== live.defaults[i]) await daemon({ op: 'key_set', layer, index: i, word: live.defaults[i] })
+        if (live.keys[i] !== live.defaults[i]) {
+          await daemon({ op: 'key_set', layer, index: i, word: live.defaults[i] })
+          if (advancedOf(live.keys[i])) old.push(live.keys[i])
+        }
       }
+      if (old.length) await tidy(old)
       await load(layer)
     } catch (e) {
       setError(String(e))
@@ -157,12 +218,15 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
 
   // The board shows what each key does on this layer; changed keys get a ring.
   const legends: Record<string, { label: string; faint?: boolean }> = {}
+  const badges: Record<string, string> = {}
   const rings: Record<string, string> = {}
   data.keys.forEach((w, i) => {
     const id = MATRIX[i]
     if (!id) return
     const d = label(w)
     legends[id] = { label: w === TRANSPARENT ? '' : d.label || '—', faint: w === TRANSPARENT || w === 0 }
+    const adv = advancedOf(w)
+    if (adv) badges[id] = TYPE_NAMES[adv.type].short
     if (w !== data.defaults[i]) rings[id] = 'var(--accent)'
   })
   if (selected) rings[selected] = 'var(--text)'
@@ -170,14 +234,26 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
   // A plain board, so legends read clearly; the selected and changed keys glow.
   const frame: RGB[] = useMemo(() => Array.from({ length: KEY_LEDS }, () => OFF), [])
 
+  /** This mode's Tap Dance and Toggle keys, to put one on another key as well. SOCD pairs are made on the Advanced keys page. */
+  const advancedChoices: KeyCode[] = useMemo(() => {
+    if (!tables) return []
+    const mine = [0, 1, 2, 3].map((s) => layers[os * 4 + s]?.keys ?? DEFAULT_LAYERS[os * 4 + s])
+    const refs = references(mine)
+    const out: KeyCode[] = []
+    for (const s of [...refs.tapdance.keys()].sort((a, b) => a - b)) out.push({ code: 0x7f40 | s, label: 'TD', name: `Tap Dance: ${describeTapDance(tapDanceAt(tables, os, s), os)}`, category: 'advanced' })
+    for (const s of [...refs.tgl.keys()].sort((a, b) => a - b)) out.push({ code: 0x7f80 | s, label: 'TGL', name: `Toggle: ${describeToggle(toggleAt(tables, os, s), os).replace(/^toggles /, '')}`, category: 'advanced' })
+    return out
+  }, [tables, layers, os])
+
   const choices = useMemo(() => {
     const q = query.trim().toLowerCase()
     const all = [...KEYCODES.filter((k) => offeredIn(k, os) || k.code === TRANSPARENT), ...macros(os)]
     if (q) return all.filter((k) => k.label.toLowerCase().includes(q) || k.name.toLowerCase().includes(q)).slice(0, 80)
     if (group === 'macros') return macros(os)
+    if (group === 'advanced') return isKnob ? [] : advancedChoices
     const cats = GROUPS.find((g) => g.id === group)!.categories
     return all.filter((k) => cats.includes(k.category))
-  }, [group, query, os])
+  }, [group, query, os, advancedChoices, isKnob])
 
   const knobLabel = (id: string) => {
     const i = matrixIndex(id)
@@ -213,6 +289,7 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
           <Keyboard
             frame={frame}
             legends={legends}
+            badges={badges}
             rings={rings}
             onKeyDown={(k) => setSelected(selected === k.id ? null : k.id)}
             tip={(k) => {
@@ -277,6 +354,17 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
               </div>
             </div>
 
+            {currentAdv && (
+              <div className="setup">
+                <p>
+                  This key is a <strong>{TYPE_NAMES[currentAdv.type].name}</strong>. Change it on the Advanced keys page, or pick something below to replace it.
+                </p>
+                <button className="button" onClick={() => onEditAdvanced?.({ os, type: currentAdv.type, slot: currentAdv.slot })}>
+                  Edit on Advanced keys
+                </button>
+              </div>
+            )}
+
             {pending && (
               <div className="setup warn">
                 <p>
@@ -293,7 +381,7 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
 
             {!query && (
               <div className="chips picker-groups">
-                {GROUPS.map((g) => (
+                {GROUPS.filter((g) => g.id !== 'advanced' || !isKnob).map((g) => (
                   <button key={g.id} className={`chip${group === g.id ? ' on' : ''}`} onClick={() => setGroup(g.id)}>
                     {g.label}
                   </button>
@@ -316,6 +404,18 @@ export function KeymapPage({ ctx, assign: target, onAssignEnd, onBack }: { ctx: 
                 </button>
               ))}
             </div>
+            {group === 'advanced' && !query && (
+              <div className="keymap-foot">
+                <p className="row-help">
+                  {advancedChoices.length
+                    ? 'Put one of your Tap Dance or Toggle keys on this key too. Make SOCD pairs and new advanced keys on the Advanced keys page.'
+                    : `No Tap Dance or Toggle keys in ${os === 0 ? 'Mac' : 'Windows'} mode yet. Make them, and SOCD pairs, on the Advanced keys page.`}
+                </p>
+                <button className="button" onClick={() => onEditAdvanced?.({ os, type: 'tapdance' })}>
+                  Open Advanced keys
+                </button>
+              </div>
+            )}
             {!editable && <p className="row-help">{state.connected ? 'Reading your keymap…' : 'Plug in the USB cable to change keys.'}</p>}
           </motion.div>
         ) : (
