@@ -1,0 +1,153 @@
+import { motion } from 'motion/react'
+import { useEffect, useState } from 'react'
+import type { DaemonState } from './lib/api'
+import { css } from './lib/color'
+import { useDaemon } from './lib/useDaemon'
+import { DevicePage } from './pages/Device'
+import { HyperPage } from './pages/Hyper'
+import { KeymapPage } from './pages/Keymap'
+import { KeysPage } from './pages/Keys'
+import { LightingPage } from './pages/Lighting'
+import { ShapesPage } from './pages/Shapes'
+import { SidePage } from './pages/Side'
+
+export type Ctx = {
+  state: DaemonState
+  send: (msg: Record<string, unknown>, local?: (s: DaemonState) => DaemonState) => Promise<void>
+  pause: (on: boolean) => void
+}
+
+const PAGES = [
+  { id: 'lighting', label: 'Lighting' },
+  { id: 'shapes', label: 'Shapes' },
+  { id: 'side', label: 'Side lights' },
+  { id: 'keymap', label: 'Keymap' },
+  { id: 'hyper', label: 'Hyper' },
+  { id: 'keys', label: 'Karabiner' },
+  { id: 'device', label: 'Device' },
+] as const
+
+type PageId = (typeof PAGES)[number]['id']
+
+const highlight = { type: 'spring', stiffness: 500, damping: 38 } as const
+
+export default function App() {
+  const { state, offline, send, pause } = useDaemon()
+  const [page, setPage] = useState<PageId>(() => (localStorage.getItem('page') as PageId) || 'lighting')
+
+  useEffect(() => localStorage.setItem('page', page), [page])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.metaKey || e.altKey || e.ctrlKey) return
+      const n = +e.key
+      if (n >= 1 && n <= PAGES.length) {
+        e.preventDefault()
+        setPage(PAGES[n - 1].id)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const ctx = state ? { state, send, pause } : null
+
+  return (
+    <div className="app">
+      <aside className="sidebar-wrap">
+        <div className="sidebar">
+          <div className="brand" data-tauri-drag-region>
+            keylight
+          </div>
+          <ul className="nav">
+            {PAGES.map((p) => (
+              <li key={p.id}>
+                <button className={page === p.id ? 'nav-item active' : 'nav-item'} onClick={() => setPage(p.id)}>
+                  {page === p.id && <motion.span layoutId="nav-highlight" className="nav-highlight" transition={highlight} />}
+                  <span className="nav-label">{p.label}</span>
+                  <span className="nav-meta">{state && <NavMeta id={p.id} state={state} />}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <Connection state={state} offline={offline} />
+          <div className="hints">
+            <span>
+              <kbd>⌘1–7</kbd> pages
+            </span>
+            <span>
+              <kbd>Right ⌘</kbd> Hyper
+            </span>
+          </div>
+        </div>
+      </aside>
+
+      <main className="main">
+        <div className="toolbar" data-tauri-drag-region />
+        <div className="scroll">
+          {!ctx ? null : page === 'lighting' ? (
+            <LightingPage ctx={ctx} />
+          ) : page === 'shapes' ? (
+            <ShapesPage ctx={ctx} />
+          ) : page === 'side' ? (
+            <SidePage ctx={ctx} />
+          ) : page === 'keymap' ? (
+            <KeymapPage ctx={ctx} />
+          ) : page === 'hyper' ? (
+            <HyperPage ctx={ctx} />
+          ) : page === 'keys' ? (
+            <KeysPage ctx={ctx} />
+          ) : (
+            <DevicePage ctx={ctx} />
+          )}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+/** The little thing at the end of each sidebar row. */
+function NavMeta({ id, state }: { id: PageId; state: DaemonState }) {
+  switch (id) {
+    case 'lighting':
+      return state.base.name === 'off' ? <span>off</span> : <span className="nav-dot" style={{ background: themeSwatch(state) }} />
+    case 'shapes': {
+      const shown = state.layers.filter((l) => l.visible).length
+      return shown ? <span>{shown}</span> : null
+    }
+    case 'side':
+      return state.side.mode === 4 ? <span>off</span> : <span className={`nav-dot${state.side.mode === 3 ? ' breathe' : ''}`} style={{ background: css(state.side.color) }} />
+    case 'hyper':
+      return state.hyper ? <span className="nav-live">held</span> : <span>{state.hyper_keys.length}</span>
+    default:
+      return null
+  }
+}
+
+export function themeSwatch(state: DaemonState) {
+  const b = state.base
+  if (b.name === 'solid') return css(b.color ?? [255, 255, 255])
+  if (b.name === 'gradient') return `linear-gradient(90deg, ${css(b.color ?? [255, 170, 110])}, ${css(b.color2 ?? [150, 0, 255])})`
+  if (b.name === 'shape') return css(b.color ?? [200, 0, 0])
+  if (b.name === 'effect' && b.rgb === false) return css(b.color ?? [255, 170, 110])
+  if (b.name === 'rainbow' || b.name === 'effect') return 'conic-gradient(from 90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)'
+  return 'linear-gradient(180deg, #f00 0 17%, #ff5a00 0 34%, #ffc800 0 50%, #00dc3c 0 67%, #005aff 0 84%, #9600ff 0)'
+}
+
+function Connection({ state, offline }: { state: DaemonState | null; offline: boolean }) {
+  const [kind, text] = offline
+    ? ['bad', 'Keylight isn’t running']
+    : !state
+      ? ['wait', 'Connecting…']
+      : state.connected
+        ? ['ok', 'Air75 V3 · cable']
+        : state.error === 'dongle'
+          ? ['warn', 'Plug in the cable']
+          : ['warn', 'Not plugged in']
+  return (
+    <div className={`connection ${kind}`} title={kind === 'warn' ? 'Settings travel over the USB cable only. Changes are saved and applied when it’s plugged in.' : undefined}>
+      <span className="connection-dot" />
+      {text}
+    </div>
+  )
+}

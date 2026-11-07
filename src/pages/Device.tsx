@@ -1,0 +1,115 @@
+import { useEffect, useState } from 'react'
+import type { Ctx } from '../App'
+import { Keyboard } from '../components/Keyboard'
+import { Page } from '../components/Page'
+import { Row, Slider, Toggle } from '../components/controls'
+import { autostart, daemon, type Sleep } from '../lib/api'
+import { Segmented } from '../components/controls'
+
+type Func = { stabilization: number; disable_win: boolean; disable_alt_f4: boolean; disable_alt_tab: boolean }
+import { useThrottle } from '../lib/useDaemon'
+
+export function DevicePage({ ctx }: { ctx: Ctx }) {
+  const { state, send } = ctx
+  const [login, setLogin] = useState<boolean | null>(null)
+  const [func, setFunc] = useState<Func | null>(null)
+  useEffect(() => {
+    if (state.connected) daemon<Func>({ op: 'func' }).then(setFunc).catch(() => {})
+    else setFunc(null)
+  }, [state.connected])
+  const setFuncField = (patch: Partial<Func>) => {
+    setFunc((f) => f && { ...f, ...patch })
+    daemon<Func>({ op: 'func', ...patch }).then(setFunc).catch(() => {})
+  }
+  useEffect(() => void autostart().then(setLogin).catch(() => {}), [])
+  const d = state.device
+  const sleep = d.sleep
+
+  const setSleep = (patch: Partial<Sleep>) =>
+    send({ op: 'sleep', ...patch }, (s) => ({ ...s, device: { ...s.device, sleep: s.device.sleep && { ...s.device.sleep, ...patch } } }))
+  const setSleepSlow = useThrottle(setSleep, 600)
+
+  const link = !state.connected
+    ? state.error === 'dongle'
+      ? 'Typing through the 2.4G dongle. NuPhy’s dongle only carries keystrokes, so settings need the USB cable. Plug it in and Keylight connects by itself.'
+      : 'Not connected. Plug the keyboard in with its USB cable.'
+    : 'Connected by USB cable. Everything you set stays on the keyboard after you unplug; Hyper lighting needs the cable in.'
+
+  return (
+    <Page title="Device" meta="Your Air75 V3, and how Keylight talks to it." state={state} board={<Keyboard frame={state.frame} side={state.side} />}>
+      <Row icon="keyboard" title={d.name ?? 'Air75 V3'}>
+        <p className="row-text">{link}</p>
+        {state.connected && (
+          <dl className="facts">
+            <dt>Firmware</dt>
+            <dd>
+              {d.firmware ?? '—'}
+            </dd>
+            <dt>Mode</dt>
+            <dd>{d.os === 'windows' ? 'Windows' : 'Mac'}</dd>
+            <dt>Layout</dt>
+            <dd>{d.layout === 'iso' ? 'ISO (drawn here as ANSI)' : d.layout === 'jis' ? 'JIS (drawn here as ANSI)' : 'ANSI'}</dd>
+          </dl>
+        )}
+      </Row>
+
+      <Row icon="moon" title="Sleep" aside={sleep && <Toggle on={sleep.enabled} onChange={(enabled) => setSleep({ enabled })} label="Auto-sleep" />}>
+        {!sleep ? (
+          <p className="row-help">Shows up once the keyboard is plugged in with its USB cable.</p>
+        ) : sleep.enabled ? (
+          <div className="sleep-grid">
+            <span>Lights off after</span>
+            <Slider value={sleep.minutes} min={5} max={127} format={(v) => `${v} min`} onChange={(minutes) => setSleepSlow({ minutes })} />
+            <span>Deep sleep after</span>
+            <Slider value={sleep.deep_minutes} min={5} max={127} format={(v) => `${v} min`} onChange={(deep_minutes) => setSleepSlow({ deep_minutes })} />
+          </div>
+        ) : (
+          <p className="row-help">The keyboard stays awake until you switch it off.</p>
+        )}
+      </Row>
+
+      <Row icon="keyboard" title="Typing" aside={func && <Segmented value={func.stabilization} options={[{ value: 1, label: 'Low' }, { value: 2, label: 'Medium' }, { value: 3, label: 'High' }]} onChange={(stabilization) => setFuncField({ stabilization })} />}>
+        <p className="row-help">
+          {func
+            ? 'Chatter filter: how hard the keyboard works to ignore a switch bouncing (a key typing twice). Raise it if a key double-types.'
+            : 'Shows up once the keyboard is plugged in with its USB cable.'}
+        </p>
+        {func && d.os === 'windows' && (
+          <div className="func-toggles">
+            <label>
+              <Toggle on={func.disable_win} onChange={(disable_win) => setFuncField({ disable_win })} label="Lock the Windows key" /> Lock the Windows key
+            </label>
+            <label>
+              <Toggle on={func.disable_alt_f4} onChange={(disable_alt_f4) => setFuncField({ disable_alt_f4 })} label="Block Alt+F4" /> Block Alt+F4
+            </label>
+            <label>
+              <Toggle on={func.disable_alt_tab} onChange={(disable_alt_tab) => setFuncField({ disable_alt_tab })} label="Block Alt+Tab" /> Block Alt+Tab
+            </label>
+          </div>
+        )}
+      </Row>
+
+      <Row
+        icon="power"
+        title="Open at login"
+        aside={login !== null && <Toggle on={login} onChange={(on) => autostart(on).then(setLogin)} label="Open at login" />}
+      >
+        <p className="row-help">
+          Keylight lives in the menu bar and keeps the lights and Hyper working with its window closed. It has made {state.writes} {state.writes === 1 ? 'change' : 'changes'} on the keyboard since it started, writing only the keys that change.
+        </p>
+      </Row>
+
+      <Row icon="terminal" title="From the command line">
+        <p className="row-help">
+          Karabiner tells Keylight about Hyper with <code>keylight hyper on</code>. Scripts can send anything the app can, e.g. <code>{`keylight send '{"op":"base","name":"rainbow"}'`}</code>. The command lives at <code>/Applications/Keylight.app/Contents/MacOS/keylight</code>.
+        </p>
+      </Row>
+
+      <Row icon="shield" title="What Keylight sends">
+        <p className="row-help">
+          Lighting, side lights, sleep and typing settings, keymaps and macros, and nothing else. It never sends the commands for firmware updates, factory reset, or wiping keymaps, and it backs up your keymap before its first change.
+        </p>
+      </Row>
+    </Page>
+  )
+}

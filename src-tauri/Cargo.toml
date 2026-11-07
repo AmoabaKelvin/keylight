@@ -1,0 +1,25 @@
+[package]
+name = "keylight"
+version = "0.1.0"
+description = "Lights, shapes and keys for the NuPhy Air75 V3"
+edition = "2024"
+
+[lib]
+name = "keylight_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.3", features = [] }
+
+[dependencies]
+hidapi = "2"
+plist = "1"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+tauri-plugin-autostart = "2"
+tauri = { version = "2.12.4", features = ["macos-private-api", "tray-icon", "image-png"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
