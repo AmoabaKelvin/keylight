@@ -1,0 +1,12 @@
+// Keylight's website: static files only, served by Workers static assets.
+// Build with `pnpm build`, then `pnpm deploy` (see README.md).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "keylight-site",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page"
+  },
+  "routes": [{ "pattern": "nuphy.kelvinamoaba.com", "custom_domain": true }]
+}
