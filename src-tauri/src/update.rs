@@ -58,6 +58,9 @@ pub fn on_launch(app: &AppHandle) {
 pub async fn install(app: AppHandle) -> Result<(), String> {
     let update = app.state::<Pending>().0.lock().unwrap().clone().ok_or("No update to install")?;
     update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    // The new copy can start before this one exits. Free the socket so it doesn't find this
+    // copy still listening and leave the command line without a server.
+    let _ = std::fs::remove_file(crate::server::socket_path());
     app.restart()
 }
 
