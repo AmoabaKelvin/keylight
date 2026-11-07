@@ -55,7 +55,7 @@ export const PRESETS: Preset[] = [
   {
     id: 'ka',
     name: 'KA',
-    hint: 'Your initials',
+    hint: 'Two letters, two colours',
     build: () => ({
       ...leds([1, 16, 31, 46, 60, 32, 18, 4, 48, 62], [0, 200, 255]),
       ...leds([8, 9, 22, 25, 36, 37, 38, 39, 40, 51, 55, 64, 69], [255, 0, 150]),
