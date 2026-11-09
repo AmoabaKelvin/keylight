@@ -246,7 +246,20 @@ impl Engine {
     }
 
     fn owns_keys(&self) -> bool {
-        matches!(self.base_name(), "effect" | "shape")
+        match self.base_name() {
+            "effect" => true,
+            "shape" => self.firmware_shapes(),
+            _ => false,
+        }
+    }
+
+    /// Built-in shapes (light mode 22) exist only on the ANSI board's firmware from 1.0.17.6, which
+    /// is NuPhy IO's `presetShapeLightMode` gate. ISO/JIS firmware 1.0.16.6 turns 22 into 21 and
+    /// ignores the shape bytes, so there Keylight draws the heart itself (BOARDS-2026-11.md §2.3).
+    fn firmware_shapes(&self) -> bool {
+        let Some(kb) = &self.kb else { return true }; // unplugged: leave the theme as it is
+        let version = self.device.get("firmware").and_then(Value::as_str).map(|v| v.split('.').map(|n| n.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>());
+        kb.pid == 0x1028 && version.is_some_and(|v| v >= vec![1, 0, 17, 6])
     }
 
     fn base_frame(&self) -> Leds {
@@ -801,6 +814,7 @@ impl Engine {
             "side": self.side,
             "frame": (0..self.layout().key_leds()).map(|l| frame.get(&l).copied().unwrap_or(OFF)).collect::<Vec<_>>(),
             "preview": self.preview.is_some(),
+            "firmware_shapes": self.firmware_shapes(),
             "writes": self.writes,
         })
     }

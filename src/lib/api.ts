@@ -30,6 +30,8 @@ export type Side = { mode: number; brightness: number; speed: number; color: RGB
 
 export type DaemonState = {
   connected: boolean
+  /** False when the keyboard's firmware has no built-in shapes (ISO/JIS); Keylight draws the heart itself. */
+  firmware_shapes?: boolean
   device: { name?: string; firmware?: string | null; link?: 'cable' | 'dongle'; layout?: 'ansi' | 'iso' | 'jis' | 'unknown'; os?: 'mac' | 'windows'; sleep?: Sleep }
   /** Why it isn't connected: "bluetooth", "unplugged", or a message. */
   error: string | null

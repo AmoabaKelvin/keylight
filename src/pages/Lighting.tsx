@@ -76,7 +76,7 @@ export function LightingPage({ ctx }: { ctx: Ctx }) {
       }
     >
       <Row title="Theme">
-        <Segmented value={base.name} options={THEMES} onChange={theme} />
+        <Segmented value={base.name} options={state.firmware_shapes === false && base.name !== 'shape' ? THEMES.filter((t) => t.value !== 'shape') : THEMES} onChange={theme} />
         {hiddenShapes > 0 && (
           <p className="row-help">
             {base.name === 'effect' ? 'Effects' : 'Built-in shapes'} are drawn by the keyboard itself, so your {hiddenShapes === 1 ? 'shape' : `${hiddenShapes} shapes`} won’t show
@@ -170,9 +170,10 @@ export function LightingPage({ ctx }: { ctx: Ctx }) {
 
       {base.name === 'shape' && (
         <>
-          <Row title="Shape" aside={<span className="row-note">drawn by the keyboard</span>}>
+          <Row title="Shape" aside={<span className="row-note">{state.firmware_shapes === false ? 'drawn by Keylight' : 'drawn by the keyboard'}</span>}>
+            {state.firmware_shapes === false && <p className="row-help">This keyboard’s firmware has no built-in shapes, so Keylight draws the heart itself. Try the Shapes page for more.</p>}
             <div className="chips">
-              {FIRMWARE_SHAPES.map((name, i) => (
+              {FIRMWARE_SHAPES.slice(0, state.firmware_shapes === false ? 1 : undefined).map((name, i) => (
                 <button key={name} className={`chip${(base.shape ?? 0) === i ? ' on' : ''}`} onClick={() => apply({ ...base, shape: i })}>
                   {name}
                 </button>
