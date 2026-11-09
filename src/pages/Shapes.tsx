@@ -5,7 +5,7 @@ import { Keyboard, MiniBoard } from '../components/Keyboard'
 import { Page, Tip } from '../components/Page'
 import { Row, Swatches, Toggle } from '../components/controls'
 import type { Layer } from '../lib/api'
-import { colorName, same, type RGB } from '../lib/color'
+import { colorName, css, hex, same, type RGB } from '../lib/color'
 import { compose } from '../lib/compose'
 import { keyName, mirror, type Key } from '../lib/layout'
 import { PRESETS, uniqueName, type Leds, type Preset } from '../lib/shapes'
@@ -21,6 +21,8 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
   const [brush, setBrush] = useState<RGB | null>([200, 0, 0])
   const [symmetric, setSymmetric] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
+  /** Which of the shape's colours the Shape colour row changes. */
+  const [target, setTarget] = useState<RGB | null>(null)
   const stroke = useRef<{ erase: boolean } | null>(null)
   const previewTimer = useRef<number | null>(null)
 
@@ -75,9 +77,31 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
     push(editing, next)
   }
 
+  /** The colours in the shape being edited, in key order. */
+  const colours = useMemo(() => {
+    const out: RGB[] = []
+    for (const c of Object.values(draft ?? {})) if (!out.some((o) => same(o, c))) out.push(c)
+    return out
+  }, [draft])
+  const current = colours.find((c) => same(c, target)) ?? colours[0] ?? null
+
+  /** Every key in `from` turns `to`; the brush follows, so new keys match. */
+  const recolour = (from: RGB, to: RGB) => {
+    if (!editing || !draft) return
+    const next = Object.fromEntries(Object.entries(draft).map(([l, c]) => [l, same(c, from) ? to : c]))
+    setDraft(next)
+    push(editing, next) // throttled: the custom picker fires on every drag
+    setTarget(to)
+    setBrush(to)
+  }
+
   const onKeyDown = (k: Key, e: React.PointerEvent) => {
     if (!editing || !draft) return
     e.preventDefault()
+    if (e.shiftKey) {
+      if (draft[k.led] && brush) recolour(draft[k.led], brush)
+      return
+    }
     pause(true)
     // Clicking a key already in the brush colour clears it, like a pixel editor's toggle.
     const erase = e.altKey || brush === null || same(draft[k.led], brush)
@@ -125,7 +149,7 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
   return (
     <Page
       title="Shapes"
-      meta={editing ? <>Drawing <strong>{editing}</strong>. Click or drag across keys. ⌥ erases, Esc finishes.</> : 'Patterns drawn on top of the theme. Pick one to edit it, or start from a preset.'}
+      meta={editing ? <>Drawing <strong>{editing}</strong>. Click or drag across keys. ⇧-click recolours every key of that colour, ⌥ erases, Esc finishes.</> : 'Patterns drawn on top of the theme. Pick one to edit it, or start from a preset.'}
       state={state}
       actions={
         editing ? (
@@ -155,7 +179,23 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
       <AnimatePresence initial={false}>
         {editing && (
           <motion.div key="brush" className="brush-bar" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}>
+            {current && (
+              <Row title="Shape colour">
+                {colours.length > 1 && (
+                  <>
+                    <p className="row-help">This shape has {colours.length} colours. Pick the one to change:</p>
+                    <div className="swatches shape-colours">
+                      {colours.map((c) => (
+                        <button key={hex(c)} className={`swatch${same(c, current) ? ' on' : ''}`} title={colorName(c)} style={{ '--c': css(c) } as React.CSSProperties} onClick={() => setTarget(c)} />
+                      ))}
+                    </div>
+                  </>
+                )}
+                <Swatches value={current} onChange={(c) => c && recolour(current, c)} />
+              </Row>
+            )}
             <Row title="Brush">
+              <p className="row-help">Paints the keys you click.</p>
               <Swatches value={brush} onChange={setBrush} allowNone />
             </Row>
             <Row title="Mirror" aside={<Toggle on={symmetric} onChange={setSymmetric} label="Mirror" />}>
