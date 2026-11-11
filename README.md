@@ -1,6 +1,6 @@
 # Keylight
 
-A Mac app for the NuPhy Air75 V3: lighting, keymaps and Hyper-key shortcuts, set over the USB cable.
+A Mac app for NuPhy keyboards: lighting, keymaps and Hyper-key shortcuts, set over the USB cable. It's made on the Air75 V3; other NuPhy IO boards are experimental (see [Supported boards](#supported-boards)).
 
 ![Keylight's Lighting page](docs/screenshots/lighting.png)
 
@@ -17,6 +17,7 @@ Website: [nuphy.kelvinamoaba.com](https://nuphy.kelvinamoaba.com)
 - **Hyper highlighting.** Hold Right ⌘ and only the keys you've bound to Hyper shortcuts light up. Click keys to mark them. If you use Tinycast, Keylight reads its Hyper shortcuts for you.
 - **Karabiner setup.** One click adds three Karabiner-Elements rules: Right ⌘ as Hyper, Caps Lock as Control with a double-tap for Caps Lock, and both Shifts together for Caps Lock.
 - **Device settings.** Auto-sleep timers, the typing filter against key chatter, and open at login. It also shows the firmware version and whether the keyboard is in Mac or Windows mode.
+- **More boards, experimental.** The Air65 V3, Air100 V3, Kick75, Node75, Node100 and Halo V2 are detected and drawn in their own layouts, and Keylight can set their lighting. **Copy diagnostics** on the Device page copies what a tester needs to send us.
 - **Menu bar.** Closing the window leaves Keylight in the menu bar with a few quick themes.
 - **Command line.** A `keylight` command and a local socket, for scripts and Karabiner.
 
@@ -29,10 +30,31 @@ Website: [nuphy.kelvinamoaba.com](https://nuphy.kelvinamoaba.com)
 ## Requirements
 
 - macOS 13 or later.
-- A NuPhy Air75 V3 connected with the **USB cable**. The 2.4G dongle and Bluetooth only carry keystrokes, so Keylight can't change settings through them. You can keep typing over either one; Keylight saves your settings and applies them the next time the cable is plugged in.
+- A NuPhy Air75 V3, or one of the experimental boards below, connected with the **USB cable**. The 2.4G dongle and Bluetooth only carry keystrokes, so Keylight can't change settings through them. You can keep typing over either one; Keylight saves your settings and applies them the next time the cable is plugged in.
 - [Karabiner-Elements](https://karabiner-elements.pqrs.org), only for the Hyper key and the Caps Lock rules.
 
 I have tested Keylight on the ANSI Air75 V3 with firmware 1.0.23.6. ISO and JIS boards are drawn in their own layouts too, picked from the USB product ID; if that's wrong, choose the layout on the Device page. Their LED and key maps come from NuPhy IO's data and haven't been checked on a real ISO or JIS board yet.
+
+## Supported boards
+
+Keylight tells boards apart by their USB product ID (System Information → USB), not by name, because NuPhy uses "V2" for two different kinds of board.
+
+| Board | USB product IDs | Status |
+|---|---|---|
+| Air75 V3 (ANSI, ISO, JIS) | 0x1028, 0x102A, 0x1029 | Supported |
+| Air65 V3 (ANSI, ISO, JIS) | 0x102B, 0x1040, 0x1042 | Experimental |
+| Air100 V3 (ANSI, ISO, JIS) | 0x102D, 0x1039, 0x103F | Experimental |
+| Kick75, Kick75 High | 0x1026, 0x1027 | Experimental |
+| Node75 LP (ANSI, ISO, JIS) | 0x1030, 0x1034, 0x1032 | Experimental |
+| Node75 HP (ANSI, ISO, JIS) | 0x1031, 0x1035, 0x1033 | Experimental |
+| Node100 LP (ANSI, ISO, JIS) | 0x1037, 0x103B, 0x103C | Experimental |
+| Node100 HP (ANSI, ISO, JIS) | 0x1036, 0x1038, 0x103A | Experimental |
+| Halo65, Halo75, Halo96 V2, the NuPhy IO ones (ISO for 75 and 96) | 0x102F, 0x102C, 0x102E, 0x1043, 0x1044 | Experimental |
+| Air60, Air75 and Air96 V2, Gem80, Halo V2 and Kick75 on QMK | 0x3255, 0x3246, 0x3266, 0x3275, 0x3315, 0x32F5, 0x3302, 0x32D5 | Not supported yet |
+
+**Experimental** means Keylight connects, reads the board and draws it, with an Experimental badge on the Device page. It writes nothing until you turn on **Experimental lighting** there, and only if the board answered the way Keylight expects: its LED count, key matrix and light state. Then it sets the lighting: themes, shapes, effects and side lights. Keymaps, macros, advanced keys and settings stay read-only on these boards for now. Their layouts and LED maps come from NuPhy IO's data and haven't been checked on a real board, so a key may light up in the wrong place. If you own one, **Copy diagnostics** on the Device page and paste it into an issue.
+
+The QMK boards speak VIA, a different protocol, and need their own driver. Keylight sees them but doesn't open them.
 
 ## Install
 
@@ -101,7 +123,8 @@ echo '{"op":"state"}' | nc -U ~/Library/Application\ Support/Keylight/keylight.s
 
 Keylight writes to your keyboard's memory, so it limits what it can send:
 
-- **An allowlist of 21 commands.** Every packet goes through one function, and it refuses any command not on the list. The list covers device info, lighting, per-key colour, keymap, macros, the SOCD, Tap Dance and Toggle tables, typing and sleep settings, and the session handshake. See `ALLOWED` in [`src-tauri/src/hid.rs`](src-tauri/src/hid.rs).
+- **An allowlist of 23 commands.** Every packet goes through one function, and it refuses any command not on the list. The list covers device info, the LED count and LED colours (reads), lighting, per-key colour, keymap, macros, the SOCD, Tap Dance and Toggle tables, typing and sleep settings, and the session handshake. See `ALLOWED` in [`src-tauri/src/hid.rs`](src-tauri/src/hid.rs).
+- **Experimental boards are read first.** On a board other than the Air75 V3, Keylight only reads until you turn on experimental lighting, and even then only if the board's answers match its data. It then sends the same lighting commands it sends the Air75 V3, and nothing else.
 - **Never bootloader, reset or wipe.** Firmware update mode `0xEF`, factory reset `0xF1`, and the keymap and advanced-key wipes `0xB4`, `0xB7`, `0xBA` and `0xBD` are not on the list, so Keylight can't send them. It writes advanced keys one entry at a time, and clears an unused entry by writing zeros.
 - **Keymap backup before the first write.** Before it changes a key, Keylight saves all eight layers, both macro banks and the three advanced-key tables to `~/Library/Application Support/Keylight/backups/`.
 - **Karabiner backup.** The first time Keylight edits `karabiner.json`, it copies the original to `karabiner.json.keylight-backup` next to it.
@@ -120,7 +143,8 @@ NuPhy doesn't publish the protocol. I worked it out from NuPhy IO, NuPhy's web c
 
 - An in-app firmware updater
 - Research into custom firmware
-- Support for more NuPhy boards
+- Keymaps and macros on the experimental boards, and checking their LED maps with testers
+- A driver for NuPhy's QMK boards (Air75 V2 and friends)
 - Signed and notarized releases
 
 ## Contributing
@@ -128,13 +152,13 @@ NuPhy doesn't publish the protocol. I worked it out from NuPhy IO, NuPhy's web c
 Issues and pull requests are welcome. The most useful help comes from people who own:
 
 - **An ISO or JIS Air75 V3.** Keylight draws both, but I've only checked the LED and key-matrix maps on ANSI. An issue saying which keys light up wrong, or a screenshot of the Keymap page, is enough to start.
-- **Another NuPhy keyboard.** Other boards that NuPhy IO configures may use the same commands. Send the USB product ID, the firmware version NuPhy IO shows, and whether Keylight connects at all.
+- **Another NuPhy keyboard.** Plug it in, open the Device page, click **Copy diagnostics** and paste the result into an issue. It holds the USB product ID, firmware version, LED count, key matrix and light state. For boards Keylight doesn't detect, send the USB product ID and the firmware version NuPhy IO shows.
 
 When you change the protocol code, keep to commands already documented in `docs/PROTOCOL.md`, and never add one to the allowlist without knowing what it does.
 
 ## Disclaimer
 
-Keylight is unofficial and not affiliated with or endorsed by NuPhy. NuPhy and Air75 are trademarks of their owners. Use it at your own risk.
+Keylight is unofficial and not affiliated with or endorsed by NuPhy. NuPhy, Air75 and the other keyboard names are trademarks of their owners. Use it at your own risk.
 
 ## License
 

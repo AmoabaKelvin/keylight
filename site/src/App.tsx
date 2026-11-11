@@ -33,8 +33,8 @@ export default function App() {
       <Nav />
       <main>
         <header className="hero wrap">
-          <p className="eyebrow">For the NuPhy Air75 V3 · macOS · Free and open source</p>
-          <h1>Lighting, keymaps and Hyper for your Air75&nbsp;V3</h1>
+          <p className="eyebrow">For NuPhy keyboards · macOS · Free and open source</p>
+          <h1>Lighting, keymaps and Hyper for your NuPhy keyboard</h1>
           <p className="lede">
             Keylight is a small Mac app that sets up the keyboard over its USB cable. Pick a theme, paint keys, remap any key on any layer, and hold Right&nbsp;⌘ to light only the keys you
             have Hyper shortcuts on.
@@ -47,7 +47,9 @@ export default function App() {
               Source on GitHub
             </a>
           </div>
-          <p className="fine">macOS 13 or later. Unofficial, and not made by NuPhy.</p>
+          <p className="fine">
+            Made for the Air75&nbsp;V3. The Air65&nbsp;V3, Air100&nbsp;V3, Kick75, Node75, Node100 and Halo&nbsp;V2 are experimental. macOS 13 or later. Unofficial, and not made by NuPhy.
+          </p>
           <Hero />
         </header>
 
@@ -301,7 +303,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
     q: 'Can it break my keyboard?',
     a: (
       <>
-        Keylight sends only commands from a fixed list of 15: device info, lighting, per-key colour, keymap, macros, typing and sleep settings, and the handshake. It never sends
+        Keylight sends only commands from a fixed list of 23: device info, lighting, per-key colour, keymap, macros, advanced keys, typing and sleep settings, and the handshake. It never sends
         the commands for the bootloader, factory reset or wiping keymaps, because they aren't on the list. Before the first keymap change it saves all eight layers and both macro
         banks to <code>~/Library/Application Support/Keylight/backups/</code>.
       </>
@@ -311,7 +313,9 @@ const FAQ: { q: string; a: ReactNode }[] = [
     q: 'Which keyboards does it support?',
     a: (
       <>
-        Only the NuPhy Air75 V3 for now, in ANSI, ISO and JIS. It draws ISO and JIS boards with the ANSI layout. Other NuPhy boards are on the <a href="#roadmap">roadmap</a>.
+        The NuPhy Air75 V3, in ANSI, ISO and JIS, is fully supported. The other NuPhy IO boards are experimental: the Air65 V3, Air100 V3, Kick75, Node75, Node100 and Halo65, Halo75 and Halo96 V2. Keylight
+        reads them and draws them, and sets their lighting once you turn that on. Keymaps and macros on them come later. NuPhy's QMK boards, like the Air75 V2 and Gem80, aren't supported
+        yet.
       </>
     ),
   },
@@ -355,7 +359,11 @@ function Faq() {
 const ROADMAP: { title: string; note: string; status: 'Shipped' | 'Planned' | 'Researching' }[] = [
   { title: 'Firmware updates in the app', note: "Install NuPhy's official firmware from Keylight, without NuPhy IO.", status: 'Researching' },
   { title: 'Custom firmware', note: 'Research first, and a test plan that keeps a way back to stock firmware before anything ships.', status: 'Researching' },
-  { title: 'More NuPhy keyboards', note: 'ISO and JIS Air75 V3 boards are drawn in their own layouts. The Air65 V3 and Air100 V3 use the same commands and come next. Owners can help by opening an issue.', status: 'Researching' },
+  {
+    title: 'More NuPhy keyboards',
+    note: 'The Air65 V3, Air100 V3, Kick75, Node and Halo V2 are in, as experimental. Owners can help by sending the diagnostics from the Device page. QMK boards need a separate driver.',
+    status: 'Researching',
+  },
   { title: 'Signed and notarised releases', note: 'So macOS opens Keylight without the Open Anyway step.', status: 'Planned' },
   { title: 'Macro recorder and editor', note: 'Record a sequence of keys or build it step by step, then put it on any key. In 0.2.', status: 'Shipped' },
   { title: 'Updates from inside the app', note: 'Keylight checks for a new version once a day and installs it when you say so. Since 0.2.', status: 'Shipped' },

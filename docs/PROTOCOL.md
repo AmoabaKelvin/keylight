@@ -24,8 +24,8 @@ and is **not** XOR'd (D ~40329, ~87700) [code].
 | 0xBB/BC/BD | Get/Set/Reset TGL | 0 | 128 B table |
 | 0xC1 | SetKeyUpload | 0 | `[1]` = stream key-press reports (key tester) |
 | 0xC2/C3 | GetMacro / SetMacro | 0 | macros |
-| 0xD1 | GetLightCount | - | never called by driver |
-| 0xD2 | GetKeyLightColor | 0 | 3 x 104 B RGB, LED order |
+| 0xD1 | GetLightCount | - | never called by driver; 1 B, a constant in every firmware. Keylight reads it at connect on experimental boards |
+| 0xD2 | GetKeyLightColor | 0 | 3 x 104 B RGB, LED order. Keylight reads it for diagnostics only |
 | 0xD5/D6 | Get/SetLightState | mode | 22 B (17 B if fw < 1.0.17.6) |
 | 0xD8 | SetSignalColor | mode | per-key `[led,R,G,B]*` |
 | 0xE1/E2 | Get/SetKeyboardFunc | mode | 4 B |
@@ -131,6 +131,23 @@ The S4 command set has no battery command, and the fw jump table has none apart 
 0xEE outside the opening handshake (re-keys and breaks any running session, such as Keylight's) · 0xB4 RestoreUseLayers, 0xB7/0xBA/0xBD Reset SOCD/TapDance/TGL (wipe user data) ·
 0xFC at address 168 (wrong knob/button type) · 0xFE SetDebugLog · 0xC4, 0xE4, 0xF4, 0xF8, 0xF9, 0x2F (fw handlers with unknown effect).
 Persistent but recoverable writes: 0xB3, 0xC3, 0xD6, 0xD8, 0xE2, 0xF5, 0xFC.
+
+## Other NuPhy IO boards [code+fw]
+Every board NuPhy IO drives with this "S4" driver uses the same framing, handshake and command set; Keylight's board table is
+[`src/lib/boards.gen.json`](../src/lib/boards.gen.json) (PIDs, LED counts, matrix, layouts; written by `scripts/gen-boards.mjs` from NuPhy IO).
+What differs, from NuPhy IO and the boards' current firmware:
+- **Light state is 17 bytes** (offsets 0-16 above) on every board except the ANSI Air75 V3 from 1.0.17.6. No shape fields, no mode 22.
+  Request exactly the board's length from 0xD5; other lengths take another path in the firmware.
+- **Per-key mode:** every firmware has it, though NuPhy IO only offers it on the Air75 V3. It's 21, but **20 on Halo V2**, which
+  has no Identify effect, so Windmill is 18 and Diagonal 19 there.
+- **Side modes:** Air65/Air100 V3 as above. Kick75 has no Rhythm (4). Node: Flowing 0, Static 1, Breathe 2, Rhythm 3.
+  Halo V2: Flowing 0, Neon 1, TwoColorCircle 2, Breathe 3, Static 4. Off is brightness 0, as NuPhy IO does it.
+- **0xA0 matrix:** Air65 V3 / Halo65 V2 5×15, Air100 V3 / Halo96 V2 6×18, Kick75 6×15, Node75 6×16 and Node100 6×19 with
+  5 extra (touch-bar) words. Layer size is `2*rows*cols + 2*extra`.
+- **0xD8 on older firmware** (all but Air75 ANSI ≥ 1.0.16.6) checks only `led <= count` from 0xD1, so `led == count` writes past
+  its buffer: never send it. Its colours live in RAM only.
+- **LED map:** NuPhy's `createLightMapping`: position p has LED p up to `skipPos`, none for the next `skipSize` positions (knob or
+  touch bar), then p - skipSize. Halo has no skip. Not yet checked on real boards.
 
 ## Connection
 Vendor HID = usagePage 1, usage 0. USB PID 0x1028 (ANSI; ISO 0x102A, JIS 0x1029), U1 2.4G dongle 0x2620 (D ~8575, ~8966).

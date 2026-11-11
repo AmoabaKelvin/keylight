@@ -9,7 +9,7 @@ import { baseFrame, compose } from '../../src/lib/compose'
 import { decode, DEFAULT_LAYERS, matrixIndex } from '../../src/lib/keycodes'
 import { BOARDS, keyName, type Key } from '../../src/lib/layout'
 
-/** The site shows the ANSI board. */
+/** The site shows the ANSI Air75 V3, the board Keylight is made on. */
 const BOARD = BOARDS.ansi
 const { byId: BY_ID, keyLeds: KEY_LEDS } = BOARD
 import { PRESETS } from '../../src/lib/shapes'
