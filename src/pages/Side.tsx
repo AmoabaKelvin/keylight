@@ -9,7 +9,7 @@ import { useLayout } from '../lib/useLayout'
 
 /**
  * In the Air75 V3's numbers, which the engine turns into each board's own (boards.rs `side_mode`).
- * Node has no Neon. Off is mode 4, which the Air boards show dark; elsewhere it's brightness 0.
+ * Node has no Neon. Off is mode 4, which the Air75 V3 shows dark; elsewhere it's brightness 0.
  */
 const MODES = [
   { value: 2, label: 'Static' },

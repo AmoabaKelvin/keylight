@@ -198,9 +198,11 @@ impl Board {
     /// it has no such mode; "off" is then brightness 0 (BOARDS-2026-11.md §3).
     pub fn side_mode(&self, mode: u8) -> Option<u8> {
         match self.family {
-            Family::Air75 | Family::Air => (mode <= 4).then_some(mode),
-            // No Rhythm, so no dark mode 4.
-            Family::Kick => (mode <= 3).then_some(mode),
+            // Mode 4 (Rhythm) looks dark on the Air75 V3, which Keylight has always used as Off.
+            Family::Air75 => (mode <= 4).then_some(mode),
+            // Same numbers on the Air65/Air100 V3, but Off is brightness 0 there, as NuPhy IO does it.
+            // Kick75 has no Rhythm at all.
+            Family::Air | Family::Kick => (mode <= 3).then_some(mode),
             // Flowing 0, Static 1, Breathe 2, Rhythm 3; no Neon.
             Family::Node => match mode {
                 0 => Some(0),
@@ -358,6 +360,7 @@ mod tests {
         assert_eq!((halo.effect_mode(17), halo.effect_mode(18), halo.effect_mode(19), halo.effect_mode(20)), (Some(17), None, Some(18), Some(19)));
         assert_eq!((0..=4).map(|m| ansi.side_mode(m)).collect::<Vec<_>>(), [Some(0), Some(1), Some(2), Some(3), Some(4)]);
         assert_eq!((0..=4).map(|m| kick.side_mode(m)).collect::<Vec<_>>(), [Some(0), Some(1), Some(2), Some(3), None]);
+        assert_eq!(by_pid(0x102B).unwrap().side_mode(4), None, "Air65: Off is brightness 0");
         assert_eq!((0..=4).map(|m| node.side_mode(m)).collect::<Vec<_>>(), [Some(0), None, Some(1), Some(2), None]);
         assert_eq!((0..=4).map(|m| halo.side_mode(m)).collect::<Vec<_>>(), [Some(0), Some(1), Some(4), Some(3), None]);
         assert!(node.side_rainbow(0) && !node.side_rainbow(1) && ansi.side_rainbow(1));

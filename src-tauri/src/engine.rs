@@ -96,7 +96,7 @@ struct Plan {
 }
 
 /// The side-light block of the light state (offset 9, 8 bytes) for this board. Keylight keeps the
-/// Air75 V3's mode numbers. Off (4) where the board has no dark Rhythm mode becomes Static at
+/// Air75 V3's mode numbers. Off (4) on any board but the Air75 V3 becomes Static at
 /// brightness 0, which is how NuPhy IO turns a zone off; any other mode the board lacks (Neon on
 /// Node) becomes Static.
 fn side_bytes(board: &Board, [mode, bright, speed, r, g, b]: [u8; 6]) -> [u8; 8] {
