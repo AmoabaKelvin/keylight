@@ -139,6 +139,12 @@ pub struct Engine {
     checks: Option<Checks>,
     /// Experimental boards (by id) the user let Keylight write lighting to.
     experimental: BTreeSet<String>,
+    /// Experimental boards (by id) the user let Keylight connect to. Until then they're only seen in
+    /// the device list: no handshake, nothing sent.
+    allowed: BTreeSet<String>,
+    /// Experimental boards that failed while connected. Keylight doesn't reconnect them by itself;
+    /// the user clicks Connect again. Not saved.
+    halted: BTreeSet<String>,
     /// Off in tests, so nothing ever opens a real keyboard.
     hid: bool,
     tinycast_mtime: Option<SystemTime>,
@@ -182,6 +188,8 @@ impl Engine {
             pid: None,
             checks: None,
             experimental: BTreeSet::new(),
+            allowed: BTreeSet::new(),
+            halted: BTreeSet::new(),
             hid,
             tinycast_mtime: None,
             writes: 0,
@@ -222,9 +230,9 @@ impl Engine {
         let board = |k: &str| d.get(k).and_then(Value::as_str).filter(|id| boards::by_id(id).is_some()).map(String::from);
         self.layout_override = board("layout_override");
         self.last_layout = board("last_layout");
-        if let Some(a) = d.get("experimental").and_then(Value::as_array) {
-            self.experimental = a.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-        }
+        let ids = |k: &str| d.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+        self.experimental = ids("experimental");
+        self.allowed = ids("connect");
     }
 
     /// The board to map keys and LEDs for: the override, else the keyboard's, else the last one seen,
@@ -261,6 +269,12 @@ impl Engine {
         None
     }
 
+    /// Whether Keylight may open this board (handshake and reads). The Air75 V3 always; an
+    /// experimental board once the user clicked Connect, and not again after an error until they do.
+    fn may_open(&self, b: &Board) -> bool {
+        b.status == Status::Supported || (self.allowed.contains(&b.id) && !self.halted.contains(&b.id))
+    }
+
     /// Keymaps, macros, advanced keys and keyboard settings: the Air75 V3 only, for now.
     fn require_supported(&mut self, what: &str) -> Result<(), String> {
         if !self.connect() {
@@ -284,6 +298,7 @@ impl Engine {
             "layout_override": self.layout_override,
             "last_layout": self.last_layout,
             "experimental": self.experimental,
+            "connect": self.allowed,
         });
         if let Some(dir) = self.path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -470,8 +485,11 @@ impl Engine {
             self.api = HidApi::new().ok();
         }
         let Some(api) = self.api.as_mut() else { return false };
+        let (allowed, halted) = (&self.allowed, &self.halted);
+        let mut opened = None;
         let result = (|| -> Result<(Keyboard, Vec<u8>), hid::Error> {
-            let kb = Keyboard::open(api)?;
+            let kb = Keyboard::open(api, |b| allowed.contains(&b.id) && !halted.contains(&b.id))?;
+            opened = Some(kb.pid);
             let base = kb.get(hid::GET_BASE, 0, 8, 0)?;
             if base[0] > 1 {
                 return Err(hid::Error::Other(format!("unexpected OS mode {}", base[0])));
@@ -522,7 +540,24 @@ impl Engine {
                 self.load_hyper_keys(true); // which shortcut keys exist depends on the layout
                 true
             }
+            Err(hid::Error::Waiting(board)) => {
+                // Seen, not opened: enough to name and draw it, and to offer Connect.
+                self.device = json!({
+                    "link": "cable", "layout": board.id, "board": board.id, "model": board.model, "variant": board.variant,
+                    "board_name": board.name(), "status": "experimental", "pid": format!("{:#06x}", board.pid),
+                })
+                .as_object()
+                .unwrap()
+                .clone();
+                let why = if self.halted.contains(&board.id) { "disconnected" } else { "waiting" };
+                self.last_error = Some(format!("{why}: {}", board.id));
+                false
+            }
             Err(e) => {
+                // An experimental board that failed right after opening isn't tried again by itself.
+                if let Some(b) = opened.and_then(boards::by_pid).filter(|b| b.status != Status::Supported) {
+                    self.halted.insert(b.id.clone());
+                }
                 self.last_error = Some(e.to_string());
                 false
             }
@@ -531,6 +566,9 @@ impl Engine {
 
     fn drop_kb(&mut self, e: hid::Error) {
         eprintln!("keylight: keyboard connection lost: {e}");
+        if let Some(b) = self.connected().filter(|b| b.status != Status::Supported) {
+            self.halted.insert(b.id.clone());
+        }
         self.kb = None;
         self.pid = None;
         self.checks = None;
@@ -739,6 +777,18 @@ impl Engine {
             "advanced_write" => return self.advanced_write(msg),
             "func" => return self.func(msg),
             "diagnostics" => return self.diagnostics(),
+            "connect" => {
+                // The user lets Keylight open an experimental board (or open it again after an error).
+                let id = msg.get("board").and_then(Value::as_str).or_else(|| self.device.get("board").and_then(Value::as_str)).unwrap_or("").to_string();
+                match boards::by_id(&id) {
+                    Some(b) if b.status == Status::Experimental => {
+                        self.allowed.insert(id.clone());
+                        self.halted.remove(&id);
+                        self.save();
+                    }
+                    _ => return Err(format!("{id:?} isn't an experimental board")),
+                }
+            }
             "experimental" => {
                 // Lets Keylight write lighting to the experimental board plugged in. It still won't
                 // if the board didn't answer as expected (read_only).
@@ -1218,6 +1268,26 @@ mod tests {
         // An override for another keyboard is ignored.
         e.layout_override = Some("jis".into());
         assert_eq!(e.board().id, "air65-v3");
+    }
+
+    #[test]
+    fn experimental_boards_are_opened_only_after_connect() {
+        let mut e = engine();
+        let air65 = boards::by_id("air65-v3").unwrap();
+        assert!(e.may_open(boards::ansi()), "the Air75 V3 always");
+        assert!(!e.may_open(air65), "not before the user clicks Connect");
+        assert!(e.handle(&json!({ "op": "connect", "board": "air65-v3" })).is_ok());
+        assert!(e.may_open(air65));
+        assert!(!e.may_open(boards::by_id("node75").unwrap()), "per board");
+        // After an error, not by itself; Connect again opens it.
+        e.halted.insert("air65-v3".into());
+        assert!(!e.may_open(air65));
+        assert!(e.handle(&json!({ "op": "connect" , "board": "air65-v3" })).is_ok());
+        assert!(e.may_open(air65));
+        assert!(e.handle(&json!({ "op": "connect", "board": "ansi" })).is_err());
+        // Saved across restarts.
+        let again = Engine::with_hid(e.path.clone(), false);
+        assert!(again.may_open(air65));
     }
 
     #[test]

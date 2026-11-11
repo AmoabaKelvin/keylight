@@ -1,6 +1,6 @@
 import { motion } from 'motion/react'
 import type { ReactNode } from 'react'
-import type { DaemonState } from '../lib/api'
+import { pendingBoard, type DaemonState } from '../lib/api'
 import { useLayout } from '../lib/useLayout'
 
 /**
@@ -10,6 +10,7 @@ import { useLayout } from '../lib/useLayout'
 export function Page({ title, meta, board, state, children, actions }: { title: string; meta: ReactNode; board: ReactNode; state: DaemonState; children: ReactNode; actions?: ReactNode }) {
   const { title: name } = useLayout()
   const unsupported = !state.connected && state.error?.startsWith('unsupported: ') ? state.error.slice('unsupported: '.length) : null
+  const pending = pendingBoard(state)
   return (
     <div className="page">
       <header className="page-header">
@@ -23,7 +24,14 @@ export function Page({ title, meta, board, state, children, actions }: { title: 
       {!state.connected && unsupported && (
         <p className="board-note">Keylight found a {unsupported}, which runs NuPhy’s QMK firmware. Keylight doesn’t support QMK boards yet, so it leaves it alone.</p>
       )}
-      {!state.connected && !unsupported && (
+      {pending && (
+        <p className="board-note experimental">
+          {pending.why === 'waiting'
+            ? `${name} found. Support is experimental, so Keylight hasn’t connected to it yet. Connect on the Device page.`
+            : `Disconnected from the ${name} after an error. Connect again on the Device page.`}
+        </p>
+      )}
+      {!state.connected && !unsupported && !pending && (
         <p className="board-note">
           Plug the keyboard into this Mac with its USB cable to apply changes; the 2.4G dongle and Bluetooth can’t carry settings. Changes here are saved until then, and the
           keyboard keeps them after you unplug.

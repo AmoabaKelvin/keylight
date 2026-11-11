@@ -86,6 +86,15 @@ export type DaemonState = {
   writes: number
 }
 
+/**
+ * An experimental board that's plugged in but not connected: either the user hasn't clicked Connect
+ * yet ("waiting"), or it failed and Keylight won't reopen it by itself ("disconnected").
+ */
+export function pendingBoard(state: DaemonState): { id: string; why: 'waiting' | 'disconnected' } | null {
+  const m = !state.connected && state.error?.match(/^(waiting|disconnected): (.+)$/)
+  return m ? { why: m[1] as 'waiting' | 'disconnected', id: m[2] } : null
+}
+
 export type Rule = { description: string; enabled: boolean }
 
 export type Rules = {

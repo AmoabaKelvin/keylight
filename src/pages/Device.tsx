@@ -4,7 +4,7 @@ import { Keyboard } from '../components/Keyboard'
 import { Page } from '../components/Page'
 import { Row, Slider, Toggle } from '../components/controls'
 import { listen } from '@tauri-apps/api/event'
-import { autostart, checkForUpdate, daemon, installUpdate, isNative, updateStatus, type Sleep, type UpdateStatus } from '../lib/api'
+import { autostart, checkForUpdate, daemon, installUpdate, isNative, pendingBoard, updateStatus, type Sleep, type UpdateStatus } from '../lib/api'
 import { Segmented } from '../components/controls'
 
 type Func = { stabilization: number; disable_win: boolean; disable_alt_f4: boolean; disable_alt_tab: boolean }
@@ -46,14 +46,20 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
   const setSleepSlow = useThrottle(setSleep, 600)
 
   const unsupported = !state.connected && state.error?.startsWith('unsupported: ') ? state.error.slice('unsupported: '.length) : null
+  const pending = pendingBoard(state)
+  const together = 'Quit NuPhy IO first: it and Keylight shouldn’t talk to the keyboard at the same time.'
   const link = !state.connected
-    ? state.error === 'dongle'
+    ? pending?.why === 'waiting'
+      ? `Keylight found a ${plugged.title}. Support for it is experimental, so Keylight hasn’t talked to it yet. Click Connect to let it read the board; it changes nothing until you turn on experimental lighting. ${together}`
+      : pending
+        ? `Disconnected from the ${plugged.title} after an error, so Keylight won’t reconnect by itself. Connect again when you’re ready. ${together}`
+        : state.error === 'dongle'
       ? 'Typing through the 2.4G dongle. NuPhy’s dongle only carries keystrokes, so settings need the USB cable. Plug it in and Keylight connects by itself.'
       : unsupported
         ? `Keylight found a ${unsupported}. That board runs NuPhy’s QMK firmware, which Keylight doesn’t support yet, so it leaves it alone.`
         : 'Not connected. Plug the keyboard in with its USB cable.'
     : experimental
-      ? `Connected by USB cable. Support for the ${plugged.title} is new, so Keylight only reads it until you turn on experimental lighting below.`
+      ? `Connected by USB cable. Support for the ${plugged.title} is new, so Keylight only reads it until you turn on experimental lighting below. Keep NuPhy IO closed while Keylight is connected.`
       : 'Connected by USB cable. Everything you set stays on the keyboard after you unplug; Hyper lighting needs the cable in.'
 
   return (
@@ -66,7 +72,17 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
             {plugged.status === 'experimental' && <span className="badge">Experimental</span>}
           </>
         }
-        aside={state.connected && <CopyDiagnostics />}
+        aside={
+          state.connected ? (
+            <CopyDiagnostics />
+          ) : (
+            pending && (
+              <button className="button small primary" onClick={() => send({ op: 'connect', board: pending.id })}>
+                {pending.why === 'waiting' ? 'Connect' : 'Connect again'}
+              </button>
+            )
+          )
+        }
       >
         <p className="row-text">{link}</p>
         {state.connected && (

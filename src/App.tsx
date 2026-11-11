@@ -2,7 +2,7 @@ import { motion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import { Keyboard } from './components/Keyboard'
 import { Page } from './components/Page'
-import type { DaemonState } from './lib/api'
+import { pendingBoard, type DaemonState } from './lib/api'
 import { css } from './lib/color'
 import { useDaemon } from './lib/useDaemon'
 import { boardFor, LayoutContext } from './lib/useLayout'
@@ -194,7 +194,9 @@ function Connection({ state, offline }: { state: DaemonState | null; offline: bo
       ? ['wait', 'Connecting…']
       : state.connected
         ? [state.read_only ? 'warn' : 'ok', `${state.device.board_name ?? 'Keyboard'} · ${state.read_only ? 'read-only' : 'cable'}`]
-        : state.error === 'dongle'
+        : pendingBoard(state)
+          ? ['warn', pendingBoard(state)!.why === 'waiting' ? 'Not connected yet' : 'Disconnected']
+          : state.error === 'dongle'
           ? ['warn', 'Plug in the cable']
           : ['warn', 'Not plugged in']
   return (

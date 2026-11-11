@@ -66,6 +66,9 @@ pub enum Error {
     DongleOnly,
     /// A NuPhy keyboard that doesn't speak this protocol (the QMK boards). Never opened.
     Unsupported(&'static str),
+    /// An experimental board the user hasn't let Keylight connect to: seen in the device list only,
+    /// never opened, no handshake.
+    Waiting(&'static boards::Board),
     Other(String),
 }
 
@@ -76,6 +79,7 @@ impl std::fmt::Display for Error {
             Error::NotLinked => write!(f, "refused"),
             Error::DongleOnly => write!(f, "dongle"),
             Error::Unsupported(name) => write!(f, "unsupported: {name}"),
+            Error::Waiting(b) => write!(f, "waiting: {}", b.id),
             Error::Other(e) => write!(f, "{e}"),
         }
     }
@@ -96,21 +100,31 @@ pub struct Keyboard {
 }
 
 impl Keyboard {
-    pub fn open(api: &mut HidApi) -> Result<Keyboard, Error> {
+    /// Opens the first board in the table that's plugged in, the Air75 V3 first, as before. An
+    /// experimental board is opened only if `may_open` says so (the user clicked Connect); until then
+    /// it's only reported, as `Waiting`.
+    pub fn open(api: &mut HidApi, may_open: impl Fn(&boards::Board) -> bool) -> Result<Keyboard, Error> {
         api.refresh_devices()?;
-        // Only PIDs in the board table are opened; the Air75 V3 first, as before.
-        let mut boards: Vec<&boards::Board> = boards::all().iter().collect();
+        let mut boards: Vec<&'static boards::Board> = boards::all().iter().collect();
         boards.sort_by_key(|b| b.status != boards::Status::Supported);
+        let mut waiting = None;
         for board in boards {
             let pid = board.pid;
             let found = api.device_list().find(|d| d.vendor_id() == VID && d.product_id() == pid && d.usage_page() == 1 && d.usage() == 0);
             if let Some(info) = found {
+                if board.status != boards::Status::Supported && !may_open(board) {
+                    waiting = waiting.or(Some(board));
+                    continue;
+                }
                 let dev = info.open_device(api)?;
                 let name = info.product_string().map(str::to_string).unwrap_or_else(|| board.name());
                 let mut kb = Keyboard { dev, key: 0, name, link: "cable", pid };
                 kb.handshake()?;
                 return Ok(kb);
             }
+        }
+        if let Some(board) = waiting {
+            return Err(Error::Waiting(board));
         }
         if api.device_list().any(|d| d.vendor_id() == VID && d.product_id() == DONGLE_PID) {
             return Err(Error::DongleOnly);
