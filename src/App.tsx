@@ -1,5 +1,7 @@
 import { motion } from 'motion/react'
 import { useEffect, useState } from 'react'
+import { Keyboard } from './components/Keyboard'
+import { Page } from './components/Page'
 import type { DaemonState } from './lib/api'
 import { css } from './lib/color'
 import { useDaemon } from './lib/useDaemon'
@@ -99,7 +101,9 @@ export default function App() {
         <div className="scroll">
           {ctx && (
             <LayoutContext value={boardFor(ctx.state)}>
-              {page === 'lighting' ? (
+              {boardFor(ctx.state).status !== 'supported' && (page === 'keymap' || page === 'macros' || page === 'advanced') ? (
+                <NotYetPage ctx={ctx} title={PAGES.find((p) => p.id === page)!.label} />
+              ) : page === 'lighting' ? (
                 <LightingPage ctx={ctx} />
               ) : page === 'shapes' ? (
                 <ShapesPage ctx={ctx} />
@@ -141,6 +145,20 @@ export default function App() {
   )
 }
 
+/** Keymaps, macros and advanced keys need each board's key matrix, which only the Air75 V3 has so far. */
+function NotYetPage({ ctx, title }: { ctx: Ctx; title: string }) {
+  const { state } = ctx
+  const board = boardFor(state)
+  return (
+    <Page title={title} meta={`Not on the ${board.title} yet.`} state={state} board={<Keyboard frame={state.frame} side={state.side} />}>
+      <p className="row-help">
+        Keylight can only change keymaps, macros and advanced keys on the Air75 V3 for now. The {board.title} uses the same commands, but its key matrix hasn’t been checked yet. Copy the
+        diagnostics on the Device page and send them to us to help.
+      </p>
+    </Page>
+  )
+}
+
 /** The little thing at the end of each sidebar row. */
 function NavMeta({ id, state }: { id: PageId; state: DaemonState }) {
   switch (id) {
@@ -151,7 +169,7 @@ function NavMeta({ id, state }: { id: PageId; state: DaemonState }) {
       return shown ? <span>{shown}</span> : null
     }
     case 'side':
-      return state.side.mode === 4 ? <span>off</span> : <span className={`nav-dot${state.side.mode === 3 ? ' breathe' : ''}`} style={{ background: css(state.side.color) }} />
+      return state.side.mode === 4 || state.side.brightness === 0 ? <span>off</span> : <span className={`nav-dot${state.side.mode === 3 ? ' breathe' : ''}`} style={{ background: css(state.side.color) }} />
     case 'hyper':
       return state.hyper ? <span className="nav-live">held</span> : <span>{state.hyper_keys.length}</span>
     default:
@@ -175,7 +193,7 @@ function Connection({ state, offline }: { state: DaemonState | null; offline: bo
     : !state
       ? ['wait', 'Connecting…']
       : state.connected
-        ? ['ok', 'Air75 V3 · cable']
+        ? [state.read_only ? 'warn' : 'ok', `${state.device.board_name ?? 'Keyboard'} · ${state.read_only ? 'read-only' : 'cable'}`]
         : state.error === 'dongle'
           ? ['warn', 'Plug in the cable']
           : ['warn', 'Not plugged in']

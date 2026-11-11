@@ -9,7 +9,7 @@ import { Segmented } from '../components/controls'
 
 type Func = { stabilization: number; disable_win: boolean; disable_alt_f4: boolean; disable_alt_tab: boolean }
 import { useThrottle } from '../lib/useDaemon'
-import { BOARDS, isLayout, type LayoutId } from '../lib/layout'
+import { BOARDS, isLayout, variants, type LayoutId } from '../lib/layout'
 import { useLayout } from '../lib/useLayout'
 
 export function DevicePage({ ctx }: { ctx: Ctx }) {
@@ -28,7 +28,10 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
   const d = state.device
   const sleep = d.sleep
   const board = useLayout()
-  const detected = isLayout(d.layout) ? d.layout : null
+  const detected = isLayout(d.board) ? d.board : null
+  const plugged = detected ? BOARDS[detected] : board
+  const experimental = state.connected && plugged.status === 'experimental'
+  const layouts = variants(plugged)
   const override = state.layout_override ?? null
   const setLayout = (v: LayoutId | 'auto') => {
     const layout_override = v === 'auto' ? null : v
@@ -40,37 +43,62 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
     send({ op: 'sleep', ...patch }, (s) => ({ ...s, device: { ...s.device, sleep: s.device.sleep && { ...s.device.sleep, ...patch } } }))
   const setSleepSlow = useThrottle(setSleep, 600)
 
+  const unsupported = !state.connected && state.error?.startsWith('unsupported: ') ? state.error.slice('unsupported: '.length) : null
   const link = !state.connected
     ? state.error === 'dongle'
       ? 'Typing through the 2.4G dongle. NuPhy’s dongle only carries keystrokes, so settings need the USB cable. Plug it in and Keylight connects by itself.'
-      : 'Not connected. Plug the keyboard in with its USB cable.'
-    : 'Connected by USB cable. Everything you set stays on the keyboard after you unplug; Hyper lighting needs the cable in.'
+      : unsupported
+        ? `Keylight found a ${unsupported}. That board runs NuPhy’s QMK firmware, which Keylight doesn’t support yet, so it leaves it alone.`
+        : 'Not connected. Plug the keyboard in with its USB cable.'
+    : experimental
+      ? `Connected by USB cable. Support for the ${plugged.title} is new, so Keylight only reads it until you turn on experimental lighting below.`
+      : 'Connected by USB cable. Everything you set stays on the keyboard after you unplug; Hyper lighting needs the cable in.'
 
   return (
-    <Page title="Device" meta="Your Air75 V3, and how Keylight talks to it." state={state} board={<Keyboard frame={state.frame} side={state.side} />}>
-      <Row icon="keyboard" title={d.name ?? 'Air75 V3'}>
+    <Page title="Device" meta="Your keyboard, and how Keylight talks to it." state={state} board={<Keyboard frame={state.frame} side={state.side} />}>
+      <Row
+        icon="keyboard"
+        title={
+          <>
+            {d.board_name ?? plugged.title}
+            {plugged.status === 'experimental' && <span className="badge">Experimental</span>}
+          </>
+        }
+        aside={state.connected && <CopyDiagnostics />}
+      >
         <p className="row-text">{link}</p>
         {state.connected && (
           <dl className="facts">
             <dt>Firmware</dt>
-            <dd>
-              {d.firmware ?? '—'}
-            </dd>
+            <dd>{d.firmware ?? '—'}</dd>
             <dt>Mode</dt>
             <dd>{d.os === 'windows' ? 'Windows' : 'Mac'}</dd>
             <dt>Layout</dt>
             <dd>{detected ? BOARDS[detected].name : 'Unknown'}</dd>
+            <dt>USB ID</dt>
+            <dd>{d.pid ?? '—'}</dd>
+            {experimental && (
+              <>
+                <dt>LEDs</dt>
+                <dd>{d.lights ?? '—'}</dd>
+                <dt>Key matrix</dt>
+                <dd>{d.matrix ? `${d.matrix[0]} × ${d.matrix[1]}` : '—'}</dd>
+              </>
+            )}
           </dl>
         )}
       </Row>
 
+      {experimental && <Experimental ctx={ctx} title={plugged.title} />}
+
+      {layouts.length > 1 && (
       <Row
         icon="keyboard"
         title="Layout"
         aside={
           <Segmented
-            value={override ?? 'auto'}
-            options={[{ value: 'auto', label: 'Auto' }, ...Object.values(BOARDS).map((b) => ({ value: b.id, label: b.name }))]}
+            value={override && layouts.some((b) => b.id === override) ? override : 'auto'}
+            options={[{ value: 'auto', label: 'Auto' }, ...layouts.map((b) => ({ value: b.id, label: b.name }))]}
             onChange={setLayout}
           />
         }
@@ -83,10 +111,15 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
               : `Drawn as ${board.name}${state.layout && !state.connected ? ', the last layout Keylight saw' : ''}. Keylight picks the layout up from the keyboard when it’s plugged in.`}
         </p>
       </Row>
+      )}
 
-      <Row icon="moon" title="Sleep" aside={sleep && <Toggle on={sleep.enabled} onChange={(enabled) => setSleep({ enabled })} label="Auto-sleep" />}>
+      <Row icon="moon" title="Sleep" aside={sleep && !experimental && <Toggle on={sleep.enabled} onChange={(enabled) => setSleep({ enabled })} label="Auto-sleep" />}>
         {!sleep ? (
           <p className="row-help">Shows up once the keyboard is plugged in with its USB cable.</p>
+        ) : experimental ? (
+          <p className="row-help">
+            {sleep.enabled ? `Lights off after ${sleep.minutes} min, deep sleep after ${sleep.deep_minutes} min.` : 'Auto-sleep is off.'} Keylight can’t change this on the {plugged.title} yet.
+          </p>
         ) : sleep.enabled ? (
           <div className="sleep-grid">
             <span>Lights off after</span>
@@ -99,6 +132,7 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
         )}
       </Row>
 
+      {!experimental && (
       <Row icon="keyboard" title="Typing" aside={func && <Segmented value={func.stabilization} options={[{ value: 1, label: 'Low' }, { value: 2, label: 'Medium' }, { value: 3, label: 'High' }]} onChange={(stabilization) => setFuncField({ stabilization })} />}>
         <p className="row-help">
           {func
@@ -119,6 +153,7 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
           </div>
         )}
       </Row>
+      )}
 
       <Row
         icon="power"
@@ -140,10 +175,63 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
 
       <Row icon="shield" title="What Keylight sends">
         <p className="row-help">
-          Lighting, side lights, sleep and typing settings, keymaps and macros, and nothing else. It never sends the commands for firmware updates, factory reset, or wiping keymaps, and it backs up your keymap before its first change.
+          Lighting, side lights, sleep and typing settings, keymaps and macros, and nothing else. It never sends the commands for firmware updates, factory reset, or wiping keymaps, and it backs up your keymap before its first change. On experimental boards it sends lighting only, and only once you turn it on.
         </p>
       </Row>
     </Page>
+  )
+}
+
+/**
+ * Read-only until the user says otherwise, and then only if the board answered as Keylight expects
+ * (its LED count, key matrix and light state; src-tauri/src/boards.rs `Checks`).
+ */
+function Experimental({ ctx, title }: { ctx: Ctx; title: string }) {
+  const { state, send } = ctx
+  const problem = state.check_problem
+  const on = !!state.experimental
+  const toggle = (next: boolean) => send({ op: 'experimental', on: next }, (s) => ({ ...s, experimental: next, read_only: next ? null : 'Experimental lighting is off' }))
+  return (
+    <Row icon="shield" title="Experimental lighting" aside={!problem && <Toggle on={on} onChange={toggle} label="Experimental lighting" />}>
+      <p className="row-help">
+        {problem
+          ? `The ${title} didn’t answer the way Keylight expects (${problem}), so it stays read-only. Copy the diagnostics above and send them to us, and we’ll sort it out.`
+          : on
+            ? `Keylight sets the lights on the ${title}: themes, shapes, effects and side lights. Keymaps, macros and settings stay read-only. If a key lights up in the wrong place, copy the diagnostics and tell us which one.`
+            : `Keylight reads the ${title} but doesn’t change it. Turn this on to let it set the lights. The key map comes from NuPhy IO and hasn’t been checked on a real board yet, so some keys may light up in the wrong place. Keymaps, macros and settings stay read-only.`}
+      </p>
+    </Row>
+  )
+}
+
+/**
+ * Reads the keyboard (device info, LED count, key matrix, light state, stock keymap, LED colours)
+ * and copies it as JSON, for testers to paste into an issue. Shows it too, in case the clipboard says no.
+ */
+function CopyDiagnostics() {
+  const [status, setStatus] = useState<'idle' | 'reading' | 'copied' | 'failed'>('idle')
+  const [text, setText] = useState<string | null>(null)
+  const copy = () => {
+    setStatus('reading')
+    const json = daemon<unknown>({ op: 'diagnostics' }).then((d) => JSON.stringify(d, null, 2))
+    json.then(setText, () => {})
+    // WebKit only lets a click write to the clipboard right away, so hand it the promise.
+    const write =
+      typeof ClipboardItem !== 'undefined'
+        ? navigator.clipboard.write([new ClipboardItem({ 'text/plain': json.then((t) => new Blob([t], { type: 'text/plain' })) })])
+        : json.then((t) => navigator.clipboard.writeText(t))
+    write.then(
+      () => setStatus('copied'),
+      () => json.then(() => setStatus('failed'), () => setStatus('failed')),
+    )
+  }
+  return (
+    <div className="diagnostics">
+      <button className="button small" disabled={status === 'reading'} onClick={copy}>
+        {status === 'reading' ? 'Reading…' : status === 'copied' ? 'Copied' : 'Copy diagnostics'}
+      </button>
+      {status === 'failed' && text && <textarea className="diagnostics-text" readOnly value={text} onFocus={(e) => e.currentTarget.select()} />}
+    </div>
   )
 }
 

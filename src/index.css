@@ -767,6 +767,39 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+.badge {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  vertical-align: 1px;
+}
+
+.diagnostics {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.diagnostics-text {
+  width: 280px;
+  height: 120px;
+  font: 11px ui-monospace, monospace;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.board-note.experimental {
+  color: var(--text);
+}
+
 .section-label {
   margin: 26px 4px 10px;
   font-size: 11px;
