@@ -145,6 +145,9 @@ pub struct Engine {
     /// Experimental boards that failed while connected. Keylight doesn't reconnect them by itself;
     /// the user clicks Connect again. Not saved.
     halted: BTreeSet<String>,
+    /// Each experimental board's light state as Keylight first found it, read at a connect while
+    /// experimental lighting was off, so switching it off can put the board back.
+    original_light: BTreeMap<String, Vec<u8>>,
     /// Off in tests, so nothing ever opens a real keyboard.
     hid: bool,
     tinycast_mtime: Option<SystemTime>,
@@ -190,6 +193,7 @@ impl Engine {
             experimental: BTreeSet::new(),
             allowed: BTreeSet::new(),
             halted: BTreeSet::new(),
+            original_light: BTreeMap::new(),
             hid,
             tinycast_mtime: None,
             writes: 0,
@@ -233,6 +237,9 @@ impl Engine {
         let ids = |k: &str| d.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
         self.experimental = ids("experimental");
         self.allowed = ids("connect");
+        if let Some(o) = d.get("original_light").and_then(Value::as_object) {
+            self.original_light = o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_array()?.iter().map(|b| b.as_u64().unwrap_or(0) as u8).collect()))).collect();
+        }
     }
 
     /// The board to map keys and LEDs for: the override, else the keyboard's, else the last one seen,
@@ -299,6 +306,7 @@ impl Engine {
             "last_layout": self.last_layout,
             "experimental": self.experimental,
             "connect": self.allowed,
+            "original_light": self.original_light,
         });
         if let Some(dir) = self.path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -521,6 +529,13 @@ impl Engine {
                 .as_object()
                 .unwrap()
                 .clone();
+                // Keylight hasn't been setting this board's lights, so this is the user's own state.
+                if let Some(state) = self.checks.as_ref().filter(|c| c.problem(board).is_none()).and_then(|c| c.light_state.clone()) {
+                    if !self.experimental.contains(&board.id) {
+                        self.original_light.insert(board.id.clone(), state);
+                        self.save();
+                    }
+                }
                 if let Some(c) = &self.checks {
                     self.device.insert("lights".into(), json!(c.lights));
                     self.device.insert("matrix".into(), json!(c.matrix.map(|m| [m.rows, m.cols, m.extra])));
@@ -693,6 +708,17 @@ impl Engine {
         plan
     }
 
+    /// The 0xD6 writes that put an experimental board's lights back as Keylight found them: main
+    /// (offset 0, 9 bytes) and side (offset 9, 8 bytes), inside its 17-byte light state.
+    fn restore_packets(&self, board: &Board) -> Vec<(u8, usize, Vec<u8>)> {
+        match self.original_light.get(&board.id) {
+            Some(s) if s.len() >= 17 && board.light_state_len(self.firmware()) == 17 && s[0] <= board.custom_mode() => {
+                vec![(hid::SET_LIGHT, 0, s[0..9].to_vec()), (hid::SET_LIGHT, 9, s[9..17].to_vec())]
+            }
+            _ => vec![],
+        }
+    }
+
     /// Called four times a second.
     pub fn tick(&mut self, n: u64) {
         if self.preview.as_ref().is_some_and(|(_, t)| t.elapsed() > PREVIEW_TTL) {
@@ -797,8 +823,13 @@ impl Engine {
                 };
                 if msg.get("on").and_then(Value::as_bool).unwrap_or(false) {
                     self.experimental.insert(board.id.clone());
-                } else {
-                    self.experimental.remove(&board.id);
+                } else if self.experimental.remove(&board.id) {
+                    // Put back the light state Keylight found, with the same 0xD6 writes it uses.
+                    let packets = self.restore_packets(board);
+                    if !packets.is_empty() {
+                        self.with_kb(|kb, mode| packets.iter().try_for_each(|(cmd, off, data)| kb.set(*cmd, *off, data, mode)))?;
+                        self.writes += packets.len() as u64;
+                    }
                 }
                 self.sent.clear();
                 self.side_sent = None;
@@ -1288,6 +1319,19 @@ mod tests {
         // Saved across restarts.
         let again = Engine::with_hid(e.path.clone(), false);
         assert!(again.may_open(air65));
+    }
+
+    #[test]
+    fn switching_experimental_lighting_off_restores_the_lights() {
+        let mut e = engine();
+        plug(&mut e, 0x102B, "1.0.5.6");
+        let board = boards::by_id("air65-v3").unwrap();
+        assert!(e.restore_packets(board).is_empty(), "nothing saved yet");
+        let found = vec![6, 80, 2, 0, 1, 0, 255, 170, 110, 3, 40, 2, 0, 0, 0, 120, 255];
+        e.original_light.insert("air65-v3".into(), found.clone());
+        assert_eq!(e.restore_packets(board), vec![(hid::SET_LIGHT, 0, found[0..9].to_vec()), (hid::SET_LIGHT, 9, found[9..17].to_vec())]);
+        e.original_light.insert("air65-v3".into(), vec![30; 17]);
+        assert!(e.restore_packets(board).is_empty(), "a mode the board doesn't have isn't written back");
     }
 
     #[test]

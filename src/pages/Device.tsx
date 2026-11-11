@@ -208,6 +208,8 @@ function Experimental({ ctx, title }: { ctx: Ctx; title: string }) {
   const { state, send } = ctx
   const problem = state.check_problem
   const on = !!state.experimental
+  // Old firmware keeps per-key colours in memory only (BOARDS-2026-11.md §2.1).
+  const dark = 'Per-key colours can go dark when Keylight isn’t running, such as on battery or after the keyboard restarts.'
   const toggle = (next: boolean) => send({ op: 'experimental', on: next }, (s) => ({ ...s, experimental: next, read_only: next ? null : 'Experimental lighting is off' }))
   return (
     <Row icon="shield" title="Experimental lighting" aside={!problem && <Toggle on={on} onChange={toggle} label="Experimental lighting" />}>
@@ -215,8 +217,8 @@ function Experimental({ ctx, title }: { ctx: Ctx; title: string }) {
         {problem
           ? `The ${title} didn’t answer the way Keylight expects (${problem}), so it stays read-only. Copy the diagnostics above and send them to us, and we’ll sort it out.`
           : on
-            ? `Keylight sets the lights on the ${title}: themes, shapes, effects and side lights. Keymaps, macros and settings stay read-only. If a key lights up in the wrong place, copy the diagnostics and tell us which one.`
-            : `Keylight reads the ${title} but doesn’t change it. Turn this on to let it set the lights. The key map comes from NuPhy IO and hasn’t been checked on a real board yet, so some keys may light up in the wrong place. Keymaps, macros and settings stay read-only.`}
+            ? `Keylight sets the lights on the ${title}: themes, shapes, effects and side lights. Keymaps, macros and settings aren’t available yet. If a key lights up in the wrong place, copy the diagnostics and tell us which one. Switching this off puts the lights back as Keylight found them. ${dark}`
+            : `Keylight reads the ${title} but doesn’t change it. Turn this on to let it set the lights. The key map comes from NuPhy IO and hasn’t been checked on a real board yet, so some keys may light up in the wrong place. Keymaps, macros and settings aren’t available yet. ${dark}`}
       </p>
     </Row>
   )
