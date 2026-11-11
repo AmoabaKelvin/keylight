@@ -26,7 +26,7 @@ and is **not** XOR'd (D ~40329, ~87700) [code].
 | 0xC2/C3 | GetMacro / SetMacro | 0 | macros |
 | 0xD1 | GetLightCount | - | never called by driver; 1 B, a constant in every firmware. Keylight reads it at connect on experimental boards |
 | 0xD2 | GetKeyLightColor | 0 | 3 x 104 B RGB, LED order. Keylight doesn't send it: its fw handler calls through a pointer we haven't traced |
-| 0xD5/D6 | Get/SetLightState | mode | 22 B (17 B if fw < 1.0.17.6) |
+| 0xD5/D6 | Get/SetLightState | mode | 22 B only on ANSI (0x1028) from 1.0.17.6; 17 B everywhere else, ISO/JIS and other boards included |
 | 0xD8 | SetSignalColor | mode | per-key `[led,R,G,B]*` |
 | 0xE1/E2 | Get/SetKeyboardFunc | mode | 4 B |
 | 0xE3 | SetDebounceTime | - | **not used**; fw routes it to the same stub as E5/E6 (touch bar) = unsupported |
