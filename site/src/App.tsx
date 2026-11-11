@@ -33,8 +33,8 @@ export default function App() {
       <Nav />
       <main>
         <header className="hero wrap">
-          <p className="eyebrow">For NuPhy keyboards · macOS · Free and open source</p>
-          <h1>Lighting, keymaps and Hyper for your NuPhy keyboard</h1>
+          <p className="eyebrow">For the NuPhy Air75 V3 · macOS · Free and open source</p>
+          <h1>Lighting, keymaps and Hyper for your Air75&nbsp;V3</h1>
           <p className="lede">
             Keylight is a small Mac app that sets up the keyboard over its USB cable. Pick a theme, paint keys, remap any key on any layer, and hold Right&nbsp;⌘ to light only the keys you
             have Hyper shortcuts on.
@@ -48,7 +48,8 @@ export default function App() {
             </a>
           </div>
           <p className="fine">
-            Made for the Air75&nbsp;V3. The Air65&nbsp;V3, Air100&nbsp;V3, Kick75, Node75, Node100 and Halo&nbsp;V2 are experimental. macOS 13 or later. Unofficial, and not made by NuPhy.
+            Made for the Air75&nbsp;V3. The Air65&nbsp;V3, Air100&nbsp;V3, Kick75, Node75, Node100 and Halo&nbsp;V2 are experimental: untested on real boards, so keys may light in the
+            wrong place. macOS 13 or later. Unofficial, and not made by NuPhy.
           </p>
           <Hero />
         </header>
@@ -313,8 +314,9 @@ const FAQ: { q: string; a: ReactNode }[] = [
     q: 'Which keyboards does it support?',
     a: (
       <>
-        The NuPhy Air75 V3, in ANSI, ISO and JIS, is fully supported. The other NuPhy IO boards are experimental: the Air65 V3, Air100 V3, Kick75, Node75, Node100 and Halo65, Halo75 and Halo96 V2. Keylight
-        reads them and draws them, and sets their lighting once you turn that on. Keymaps and macros on them come later. NuPhy's QMK boards, like the Air75 V2 and Gem80, aren't supported
+        The NuPhy Air75 V3 is supported, in ANSI, ISO and JIS (the ISO and JIS key maps haven't been checked on a real board yet). The other NuPhy IO boards are experimental: the Air65 V3,
+        Air100 V3, Kick75, Node75, Node100 and Halo65, Halo75 and Halo96 V2. They're untested on real boards, so keys may light in the wrong place. Keylight reads them once you click
+        Connect, and sets their lighting once you turn that on. Keymaps and macros on them come later. NuPhy's QMK boards, like the Air75 V2 and Gem80, aren't supported
         yet.
       </>
     ),
