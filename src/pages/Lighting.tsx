@@ -49,7 +49,8 @@ export function LightingPage({ ctx }: { ctx: Ctx }) {
     apply(next)
   }
 
-  const fx = base.name === 'effect' ? effect(base.mode) : null
+  // Halo has no Identify (18); the engine shows Wave (6) instead, so the page does too.
+  const fx = base.name === 'effect' ? effect(board.family === 'halo' && base.mode === 18 ? 6 : base.mode) : null
   const motion: Motion | undefined =
     base.name === 'effect' && fx && !state.hyper
       ? { look: fx.look, seconds: 1.6 + (base.speed ?? 2) * 0.9, reverse: base.direction === 1 }
