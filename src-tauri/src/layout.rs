@@ -1,5 +1,5 @@
 //! The Air75 V3's three layouts as the engine needs them: which LED sits under each key, and the
-//! LED range of each row. Mirrors `src/lib/layout.ts` (where the sources are); a key's LED index is
+//! LED range of each row. boards.rs uses these for the Air75 V3 and generated data for the rest. Mirrors `src/lib/layout.ts` (where the sources are); a key's LED index is
 //! its place in reading order, row by row, skipping the knob.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -8,9 +8,6 @@ pub enum Layout {
     Iso,
     Jis,
 }
-
-/// The most key LEDs any layout has (JIS), for reading saved shapes before the layout is known.
-pub const MAX_KEY_LEDS: u8 = 87;
 
 const FN_ROW: &[&str] = &["esc", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "screenshot", "ins"];
 
@@ -46,16 +43,6 @@ const JIS: [&[&str]; 6] = [
 
 impl Layout {
     pub const ALL: [Layout; 3] = [Layout::Ansi, Layout::Iso, Layout::Jis];
-
-    /// From the USB product ID (docs/PROTOCOL.md).
-    pub fn from_pid(pid: u16) -> Option<Layout> {
-        match pid {
-            0x1028 => Some(Layout::Ansi),
-            0x102A => Some(Layout::Iso),
-            0x1029 => Some(Layout::Jis),
-            _ => None,
-        }
-    }
 
     pub fn from_name(name: &str) -> Option<Layout> {
         Layout::ALL.into_iter().find(|l| l.name() == name)
@@ -99,7 +86,13 @@ impl Layout {
         out
     }
 
+    /// Every key id -> its LED.
+    pub fn leds(self) -> std::collections::HashMap<String, u8> {
+        self.rows().iter().flat_map(|r| r.iter()).enumerate().map(|(i, k)| (k.to_string(), i as u8)).collect()
+    }
+
     /// Key id (as the app names keys) -> LED index.
+    #[cfg(test)]
     pub fn led(self, name: &str) -> Option<u8> {
         self.rows().iter().flat_map(|r| r.iter()).position(|k| *k == name).map(|i| i as u8)
     }
@@ -159,6 +152,5 @@ mod tests {
         assert_eq!(Layout::Iso.row_ranges(), [(0, 15), (15, 30), (30, 45), (45, 59), (59, 74), (74, 84)]);
         assert_eq!(Layout::Jis.row_ranges(), [(0, 15), (15, 31), (31, 46), (46, 60), (60, 75), (75, 87)]);
         assert_eq!(Layout::Jis.led("rcmd"), None);
-        assert!(Layout::ALL.iter().all(|l| l.key_leds() <= MAX_KEY_LEDS));
     }
 }

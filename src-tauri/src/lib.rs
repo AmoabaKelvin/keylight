@@ -3,6 +3,7 @@
 //! The app owns the keyboard connection itself (engine + hid), keeps running in the menu bar, and
 //! listens on a local socket so Karabiner can tell it when Hyper is held (`keylight hyper on`).
 
+mod boards;
 mod caps;
 mod engine;
 mod hid;

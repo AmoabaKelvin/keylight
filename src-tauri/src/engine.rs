@@ -4,9 +4,12 @@
 //! Hyper is held, only the keys with Hyper shortcuts. Only LEDs that changed are written, side
 //! light writes are rate-limited, and there is no software animation, because we don't know
 //! whether the keyboard writes every change to flash.
+//!
+//! Boards other than the Air75 V3 are experimental (boards.rs): Keylight reads them, and writes only
+//! lighting, only once the user turns that on and the board answered as expected at connect.
 
+use crate::boards::{self, Board, Checks, Matrix, Status, MAX_KEY_LEDS};
 use crate::hid::{self, Keyboard};
-use crate::layout::{Layout, MAX_KEY_LEDS};
 use hidapi::HidApi;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -14,7 +17,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-const CUSTOM_MODE: u8 = 21;
 const SHAPE_MODE: u8 = 22;
 const OFF: Rgb = [0, 0, 0];
 const STRIPES: [Rgb; 6] = [[255, 0, 0], [255, 90, 0], [255, 200, 0], [0, 220, 60], [0, 90, 255], [150, 0, 255]];
@@ -82,6 +84,28 @@ struct Layer {
     visible: bool,
 }
 
+/// What one flush sends, and what it records as sent once it has.
+#[derive(Default)]
+struct Plan {
+    /// (command, offset, data), in order.
+    packets: Vec<(u8, usize, Vec<u8>)>,
+    main: Option<Main>,
+    repaint: bool,
+    leds: Vec<(u8, Rgb)>,
+    side: Option<[u8; 6]>,
+}
+
+/// The side-light block of the light state (offset 9, 8 bytes) for this board. Keylight keeps the
+/// Air75 V3's mode numbers; a mode the board doesn't have, such as Off (4) where there's no Rhythm,
+/// becomes Static at brightness 0, which is how NuPhy IO turns a zone off.
+fn side_bytes(board: &Board, [mode, bright, speed, r, g, b]: [u8; 6]) -> [u8; 8] {
+    let (wire, bright) = match board.side_mode(mode) {
+        Some(w) => (w, bright),
+        None => (board.side_mode(2).unwrap_or(0), 0),
+    };
+    [wire, bright, speed, board.side_rainbow(wire) as u8, 0, r, g, b]
+}
+
 pub struct Engine {
     api: Option<HidApi>,
     kb: Option<Keyboard>,
@@ -102,10 +126,18 @@ pub struct Engine {
     preview: Option<(Leds, Instant)>,
     hyper_keys: BTreeSet<String>,
     hyper_map: BTreeMap<String, String>,
-    /// Set from the Device page when the PID doesn't say the right layout.
-    layout_override: Option<Layout>,
-    /// The last layout a connected keyboard reported, kept for when none is plugged in.
-    last_layout: Option<Layout>,
+    /// Set from the Device page when the PID doesn't say the right layout: a board id, such as "iso".
+    layout_override: Option<String>,
+    /// The last board that was plugged in, kept for when none is.
+    last_layout: Option<String>,
+    /// The PID of the board plugged in now. Kept while a flush has `kb` taken out.
+    pid: Option<u16>,
+    /// What an experimental board said at connect (boards::Checks).
+    checks: Option<Checks>,
+    /// Experimental boards (by id) the user let Keylight write lighting to.
+    experimental: BTreeSet<String>,
+    /// Off in tests, so nothing ever opens a real keyboard.
+    hid: bool,
     tinycast_mtime: Option<SystemTime>,
     writes: u64,
     path: PathBuf,
@@ -119,8 +151,12 @@ fn tinycast_plist() -> PathBuf {
 
 impl Engine {
     pub fn new(path: PathBuf) -> Engine {
+        Engine::with_hid(path, true)
+    }
+
+    fn with_hid(path: PathBuf, hid: bool) -> Engine {
         let mut e = Engine {
-            api: HidApi::new().ok(),
+            api: if hid { HidApi::new().ok() } else { None },
             kb: None,
             mode: 0,
             sent: HashMap::new(),
@@ -140,6 +176,10 @@ impl Engine {
             hyper_map: BTreeMap::new(),
             layout_override: None,
             last_layout: None,
+            pid: None,
+            checks: None,
+            experimental: BTreeSet::new(),
+            hid,
             tinycast_mtime: None,
             writes: 0,
             path,
@@ -176,14 +216,58 @@ impl Engine {
         if let Some(a) = d.get("extra_hyper").and_then(Value::as_array) {
             self.extra_hyper = a.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
-        self.layout_override = d.get("layout_override").and_then(Value::as_str).and_then(Layout::from_name);
-        self.last_layout = d.get("last_layout").and_then(Value::as_str).and_then(Layout::from_name);
+        let board = |k: &str| d.get(k).and_then(Value::as_str).filter(|id| boards::by_id(id).is_some()).map(String::from);
+        self.layout_override = board("layout_override");
+        self.last_layout = board("last_layout");
+        if let Some(a) = d.get("experimental").and_then(Value::as_array) {
+            self.experimental = a.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
     }
 
-    /// The layout to map keys and LEDs for: the override, else the keyboard's, else the last one seen, else ANSI.
-    fn layout(&self) -> Layout {
-        let detected = self.device.get("layout").and_then(Value::as_str).and_then(Layout::from_name);
-        self.layout_override.or(detected).or(self.last_layout).unwrap_or(Layout::Ansi)
+    /// The board to map keys and LEDs for: the override, else the keyboard's, else the last one seen,
+    /// else the ANSI Air75 V3. An override only picks another layout of the same keyboard.
+    fn board(&self) -> &'static Board {
+        let detected = self.device.get("board").and_then(Value::as_str).and_then(boards::by_id);
+        let seen = detected.or_else(|| self.last_layout.as_deref().and_then(boards::by_id));
+        let chosen = self.layout_override.as_deref().and_then(boards::by_id).filter(|o| seen.is_none_or(|s| s.model == o.model));
+        chosen.or(seen).unwrap_or_else(boards::ansi)
+    }
+
+    /// The board plugged in now.
+    fn connected(&self) -> Option<&'static Board> {
+        self.pid.and_then(boards::by_pid)
+    }
+
+    fn firmware(&self) -> Option<&str> {
+        self.device.get("firmware").and_then(Value::as_str)
+    }
+
+    /// Why Keylight won't write lighting to the board plugged in, or None if it may.
+    fn read_only(&self) -> Option<String> {
+        let board = self.connected()?;
+        if board.status == Status::Supported {
+            return None;
+        }
+        let Some(checks) = &self.checks else { return Some("Keylight only reads this keyboard: it hasn't answered yet".into()) };
+        if let Some(p) = checks.problem(board) {
+            return Some(format!("Keylight only reads this keyboard: {p}"));
+        }
+        if !self.experimental.contains(&board.id) {
+            return Some("Experimental lighting is off".into());
+        }
+        None
+    }
+
+    /// Keymaps, macros, advanced keys and keyboard settings: the Air75 V3 only, for now.
+    fn require_supported(&mut self, what: &str) -> Result<(), String> {
+        if !self.connect() {
+            return Err(self.last_error.clone().unwrap_or_else(|| "keyboard not connected".into()));
+        }
+        match self.connected() {
+            Some(b) if b.status == Status::Supported => Ok(()),
+            Some(b) => Err(format!("{what} on the {} aren't supported yet", b.name())),
+            None => Err("unknown keyboard".into()),
+        }
     }
 
     fn save(&self) {
@@ -194,8 +278,9 @@ impl Engine {
             "side": self.side,
             "hyper_style": self.hyper_style,
             "extra_hyper": self.extra_hyper,
-            "layout_override": self.layout_override.map(Layout::name),
-            "last_layout": self.last_layout.map(Layout::name),
+            "layout_override": self.layout_override,
+            "last_layout": self.last_layout,
+            "experimental": self.experimental,
         });
         if let Some(dir) = self.path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -216,7 +301,7 @@ impl Engine {
             return;
         }
         self.tinycast_mtime = mtime;
-        let layout = self.layout();
+        let layout = self.board();
         let mut map = BTreeMap::new();
         if let Ok(plist::Value::Dictionary(prefs)) = plist::Value::from_file(&path) {
             for (k, v) in prefs.iter() {
@@ -255,17 +340,19 @@ impl Engine {
 
     /// Built-in shapes (light mode 22) exist only on the ANSI board's firmware from 1.0.17.6, which
     /// is NuPhy IO's `presetShapeLightMode` gate. ISO/JIS firmware 1.0.16.6 turns 22 into 21 and
-    /// ignores the shape bytes, so there Keylight draws the heart itself (BOARDS-2026-11.md §2.3).
+    /// ignores the shape bytes, and no other board has them, so there Keylight draws the heart itself
+    /// (BOARDS-2026-11.md §2.3). Goes by `pid`, not `kb`, which a flush takes out while it writes.
     fn firmware_shapes(&self) -> bool {
-        let Some(kb) = &self.kb else { return true }; // unplugged: leave the theme as it is
-        let version = self.device.get("firmware").and_then(Value::as_str).map(|v| v.split('.').map(|n| n.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>());
-        kb.pid == 0x1028 && version.is_some_and(|v| v >= vec![1, 0, 17, 6])
+        match self.connected() {
+            Some(b) => b.has_firmware_shapes(self.firmware()),
+            None => true, // unplugged: leave the theme as it is
+        }
     }
 
     fn base_frame(&self) -> Leds {
         let b = &self.base;
         let level = int(b.get("level"), 100).clamp(0, 100) as f64 / 100.0;
-        let layout = self.layout();
+        let layout = self.board();
         let heart: Vec<u8> = HEART.iter().filter_map(|k| layout.led(k)).collect();
         let mut frame = Leds::new();
         for (r, (start, end)) in layout.row_ranges().iter().enumerate() {
@@ -275,7 +362,7 @@ impl Engine {
                     "solid" => rgb(b.get("color"), [255, 255, 255]),
                     "stripes" => match b.get("colors").and_then(Value::as_array) {
                         Some(cs) if !cs.is_empty() => rgb(cs.get(r % cs.len()), [255, 255, 255]),
-                        _ => STRIPES[r],
+                        _ => STRIPES[r % STRIPES.len()],
                     },
                     "rainbow" => hue(t),
                     "effect" => {
@@ -306,8 +393,8 @@ impl Engine {
     }
 
     pub fn compose(&self) -> Leds {
-        let layout = self.layout();
-        let n = layout.key_leds();
+        let layout = self.board();
+        let n = layout.key_leds;
         let mut frame: Leds = (0..n).map(|l| (l, OFF)).collect();
         if self.hyper {
             let bound = rgb(self.hyper_style.get("bound"), [0, 230, 255]);
@@ -335,7 +422,8 @@ impl Engine {
     }
 
     /// The light-state main bytes the keyboard should have: per-key, or its own effect/shape.
-    fn main_target(&self) -> Main {
+    /// Effect numbers are the Air75 V3's; `board` maps them to its own.
+    fn main_target(&self, board: &Board) -> Main {
         if self.hyper || !self.owns_keys() {
             return Main::Custom;
         }
@@ -343,14 +431,15 @@ impl Engine {
         let level = int(b.get("level"), 100).clamp(0, 100) as u8;
         let speed = int(b.get("speed"), 2).clamp(0, 4) as u8;
         if self.base_name() == "effect" {
-            let mut mode = int(b.get("mode"), 6) as u8;
-            if !(1..=20).contains(&mode) {
+            let mut mode = int(b.get("mode"), 6).clamp(0, 255) as u8;
+            if board.effect_mode(mode).is_none() {
                 mode = 6;
             }
             let [r, g, bl] = rgb(b.get("color"), [255, 170, 110]);
             let rainbow = b.get("rgb").and_then(Value::as_bool).unwrap_or(true) || (16..=20).contains(&mode);
             let dir = (int(b.get("direction"), 0) & 1) as u8;
-            return Main::Firmware(vec![mode, level, speed, dir, rainbow as u8, 0, r, g, bl], None);
+            let wire = board.effect_mode(mode).unwrap_or(6);
+            return Main::Firmware(vec![wire, level, speed, dir, rainbow as u8, 0, r, g, bl], None);
         }
         let [r, g, bl] = rgb(b.get("color2"), OFF);
         let [sr, sg, sb] = rgb(b.get("color"), [255, 0, 0]);
@@ -358,10 +447,11 @@ impl Engine {
         Main::Firmware(vec![SHAPE_MODE, level, speed, 0, 0, 0, r, g, bl], Some(vec![shape, sr, sg, sb, speed]))
     }
 
+    /// Side lights as Keylight keeps them: `[mode, brightness, speed, r, g, b]`, mode in Air75 V3 numbers.
     fn side_target(&self) -> [u8; 6] {
         let s = &self.side;
         let [r, g, b] = rgb(s.get("color"), [255, 255, 255]);
-        [int(s.get("mode"), 2) as u8, int(s.get("brightness"), 25).clamp(0, 100) as u8, int(s.get("speed"), 2).clamp(0, 4) as u8, r, g, b]
+        [int(s.get("mode"), 2).clamp(0, 255) as u8, int(s.get("brightness"), 25).clamp(0, 100) as u8, int(s.get("speed"), 2).clamp(0, 4) as u8, r, g, b]
     }
 
     // ---- device ---------------------------------------------------------------------
@@ -370,40 +460,59 @@ impl Engine {
         if self.kb.is_some() {
             return true;
         }
+        if !self.hid {
+            return false;
+        }
         if self.api.is_none() {
             self.api = HidApi::new().ok();
         }
         let Some(api) = self.api.as_mut() else { return false };
-        let result = (|| -> Result<Keyboard, hid::Error> {
+        let result = (|| -> Result<(Keyboard, Vec<u8>), hid::Error> {
             let kb = Keyboard::open(api)?;
             let base = kb.get(hid::GET_BASE, 0, 8, 0)?;
             if base[0] > 1 {
                 return Err(hid::Error::Other(format!("unexpected OS mode {}", base[0])));
             }
             self.mode = base[0];
-            Ok(kb)
+            Ok((kb, base))
         })();
         match result {
-            Ok(kb) => {
+            Ok((kb, base)) => {
+                let board = boards::by_pid(kb.pid).expect("hid opens only boards in the table");
                 let fw = kb.get(hid::GET_FW, 0, 8, 0).ok();
-                let detected = Layout::from_pid(kb.pid);
-                let layout = detected.map_or("unknown", Layout::name);
+                let firmware = fw.as_deref().and_then(hid::firmware_version);
+                // An experimental board is read before anything is written, to check it's the board
+                // its PID says (boards::Checks). Reads only; a failed read just leaves it read-only.
+                self.checks = (board.status != Status::Supported).then(|| Checks {
+                    lights: kb.get(hid::GET_LIGHT_COUNT, 0, 1, 0).ok().map(|b| b[0]),
+                    matrix: Matrix::from_base(&base),
+                    light_state: kb.get(hid::GET_LIGHT, 0, board.light_state_len(firmware.as_deref()), self.mode).ok(),
+                });
                 self.device = json!({
-                    "name": kb.name, "link": kb.link, "layout": layout,
-                    "firmware": fw.as_deref().and_then(hid::firmware_version),
+                    "name": kb.name, "link": kb.link, "layout": board.id, "board": board.id,
+                    "model": board.model, "variant": board.variant, "board_name": board.name(),
+                    "status": if board.status == Status::Supported { "supported" } else { "experimental" },
+                    "pid": format!("{:#06x}", kb.pid),
+                    "firmware": firmware,
                     "os": if self.mode == 0 { "mac" } else { "windows" },
                 })
                 .as_object()
                 .unwrap()
                 .clone();
+                if let Some(c) = &self.checks {
+                    self.device.insert("lights".into(), json!(c.lights));
+                    self.device.insert("matrix".into(), json!(c.matrix.map(|m| [m.rows, m.cols, m.extra])));
+                    self.device.insert("light_state".into(), json!(c.light_state));
+                }
+                self.pid = Some(kb.pid);
                 self.kb = Some(kb);
                 self.sent.clear();
                 self.side_sent = None;
                 self.main_sent = None;
                 self.last_error = None;
                 self.read_sleep();
-                if detected.is_some() && detected != self.last_layout {
-                    self.last_layout = detected;
+                if self.last_layout.as_deref() != Some(board.id.as_str()) {
+                    self.last_layout = Some(board.id.clone());
                     self.save();
                 }
                 self.load_hyper_keys(true); // which shortcut keys exist depends on the layout
@@ -419,6 +528,8 @@ impl Engine {
     fn drop_kb(&mut self, e: hid::Error) {
         eprintln!("keylight: keyboard connection lost: {e}");
         self.kb = None;
+        self.pid = None;
+        self.checks = None;
         self.sent.clear();
         self.side_sent = None;
         self.main_sent = None;
@@ -434,9 +545,7 @@ impl Engine {
     }
 
     fn set_sleep(&mut self, msg: &Value) -> Result<(), String> {
-        if !self.connect() {
-            return Err("keyboard not connected".into());
-        }
+        self.require_supported("Sleep settings")?;
         let kb = self.kb.as_ref().unwrap();
         let r = (|| -> Result<(), hid::Error> {
             let mut b = kb.get(hid::GET_SLEEP, 0, 4, 0)?;
@@ -474,44 +583,72 @@ impl Engine {
     }
 
     fn flush_with(&mut self, kb: &Keyboard) -> Result<(), hid::Error> {
-        let main = self.main_target();
-        if self.main_sent.as_ref() != Some(&main) {
+        let plan = self.plan();
+        for (cmd, offset, data) in &plan.packets {
+            kb.set(*cmd, *offset, data, self.mode)?;
+            self.writes += 1;
+        }
+        if let Some(main) = plan.main {
+            self.main_sent = Some(main);
+        }
+        if plan.repaint {
+            self.sent.clear();
+        }
+        self.sent.extend(plan.leds);
+        if let Some(side) = plan.side {
+            self.side_sent = Some(side);
+            self.side_last = Some(Instant::now());
+        }
+        Ok(())
+    }
+
+    /// The packets that bring the keyboard in line: light state (0xD6) and per-key colours (0xD8),
+    /// nothing else. Empty when the board plugged in is read-only.
+    fn plan(&self) -> Plan {
+        let mut plan = Plan::default();
+        let Some(board) = self.connected() else { return plan };
+        if self.read_only().is_some() {
+            return plan;
+        }
+        let state_len = board.light_state_len(self.firmware());
+        // Never past the board's light state (17 bytes on all but new Air75 ANSI firmware).
+        let light = |packets: &mut Vec<(u8, usize, Vec<u8>)>, offset: usize, data: &[u8]| {
+            if offset + data.len() <= state_len {
+                packets.push((hid::SET_LIGHT, offset, data.to_vec()));
+            }
+        };
+        let main = self.main_target(board);
+        let main_changed = self.main_sent.as_ref() != Some(&main);
+        if main_changed {
             match &main {
-                Main::Custom => {
-                    kb.set(hid::SET_LIGHT, 0, &[CUSTOM_MODE], self.mode)?;
-                    self.sent.clear(); // repaint every key after an effect
-                }
+                Main::Custom => light(&mut plan.packets, 0, &[board.custom_mode()]),
                 Main::Firmware(a, b) => {
-                    kb.set(hid::SET_LIGHT, 0, a, self.mode)?;
+                    light(&mut plan.packets, 0, a);
                     if let Some(b) = b {
-                        kb.set(hid::SET_LIGHT, 17, b, self.mode)?;
+                        light(&mut plan.packets, 17, b);
                     }
                 }
             }
-            self.main_sent = Some(main.clone());
-            self.writes += 1;
+            plan.main = Some(main.clone());
         }
         if main == Main::Custom {
-            let frame = self.compose();
-            let changed: Vec<(u8, Rgb)> = frame.into_iter().filter(|(l, c)| self.sent.get(l) != Some(c)).collect();
-            if !changed.is_empty() {
-                let payload: Vec<u8> = changed.iter().flat_map(|(l, c)| [*l, c[0], c[1], c[2]]).collect();
-                kb.set(hid::SET_SIGNAL, 0, &payload, self.mode)?;
-                self.sent.extend(changed);
-                self.writes += 1;
+            plan.repaint = main_changed; // repaint every key after an effect
+            // A layout picked by hand can have more keys than the board; experimental boards never
+            // get an LED past their own keys (the old 0xD8 handler doesn't bound it well).
+            let limit = if board.status == Status::Supported { u8::MAX } else { board.key_leds };
+            plan.leds = self.compose().into_iter().filter(|(l, c)| *l < limit && (plan.repaint || self.sent.get(l) != Some(c))).collect();
+            if !plan.leds.is_empty() {
+                let payload: Vec<u8> = plan.leds.iter().flat_map(|(l, c)| [*l, c[0], c[1], c[2]]).collect();
+                plan.packets.push((hid::SET_SIGNAL, 0, payload));
             }
         }
         let side = self.side_target();
         let due = self.side_last.map_or(true, |t| t.elapsed() >= SIDE_MIN_INTERVAL);
         if self.side_sent != Some(side) && due {
-            let [mode, bright, speed, r, g, b] = side;
-            let rainbow = (mode == 1) as u8; // neon cycles colours by itself
-            kb.set(hid::SET_LIGHT, 9, &[mode, bright, speed, rainbow, 0, r, g, b], self.mode)?;
-            self.side_sent = Some(side);
-            self.side_last = Some(Instant::now());
-            self.writes += 1;
+            plan.packets.push((hid::SET_LIGHT, 9, side_bytes(board, side).to_vec()));
+            plan.side = Some(side);
         }
-        Ok(())
+        plan
     }
 
     /// Called four times a second.
@@ -581,7 +718,7 @@ impl Engine {
                 self.save();
             }
             "hyper_extra" => {
-                self.extra_hyper = msg.get("keys").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).filter(|k| Layout::ALL.iter().any(|l| l.led(k).is_some())).collect()).unwrap_or_default();
+                self.extra_hyper = msg.get("keys").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).filter(|k| boards::all().iter().any(|b| b.led(k).is_some())).collect()).unwrap_or_default();
                 self.load_hyper_keys(true);
                 self.save();
             }
@@ -597,9 +734,27 @@ impl Engine {
             "advanced" => return self.advanced(msg),
             "advanced_write" => return self.advanced_write(msg),
             "func" => return self.func(msg),
+            "diagnostics" => return self.diagnostics(),
+            "experimental" => {
+                // Lets Keylight write lighting to the experimental board plugged in. It still won't
+                // if the board didn't answer as expected (read_only).
+                let Some(board) = self.connected().filter(|b| b.status == Status::Experimental) else {
+                    return Err("no experimental keyboard plugged in".into());
+                };
+                if msg.get("on").and_then(Value::as_bool).unwrap_or(false) {
+                    self.experimental.insert(board.id.clone());
+                } else {
+                    self.experimental.remove(&board.id);
+                }
+                self.sent.clear();
+                self.side_sent = None;
+                self.side_last = None;
+                self.main_sent = None;
+                self.save();
+            }
             "reload" => self.load_hyper_keys(true),
             "layout" => {
-                self.layout_override = msg.get("layout").and_then(Value::as_str).and_then(Layout::from_name);
+                self.layout_override = msg.get("layout").and_then(Value::as_str).filter(|id| boards::by_id(id).is_some()).map(String::from);
                 self.sent.clear(); // LEDs mean different keys now: repaint them all
                 self.load_hyper_keys(true);
                 self.save();
@@ -635,6 +790,7 @@ impl Engine {
     /// One layer's 98 key words (big-endian u16), and the defaults for the same layer.
     /// Layers 0-3 belong to Mac mode, 4-7 to Windows; 0 and 4 are the base layers.
     fn keymap(&mut self, msg: &Value) -> Result<Value, String> {
+        self.require_supported("Keymaps")?;
         let layer = int(msg.get("layer"), 0).clamp(0, 7) as usize;
         let (keys, defaults) = self.with_kb(|kb, _| {
             let keys = kb.get(hid::GET_KEYS, layer * hid::LAYER_BYTES, hid::LAYER_BYTES, 0)?;
@@ -648,6 +804,7 @@ impl Engine {
     /// Saves all 8 keymap layers, both macro areas and the three advanced-key tables to a file
     /// before anything is changed.
     fn backup(&mut self) -> Result<Value, String> {
+        self.require_supported("Keymap backups")?;
         let (layers, macros, advanced) = self.with_kb(|kb, _| {
             let mut layers = Vec::new();
             for l in 0..8 {
@@ -681,6 +838,7 @@ impl Engine {
             return Err("key_set needs layer 0-7, index 0-97 and a 16-bit word".into());
         }
         check_key_word(index as usize, word as u16)?;
+        self.require_supported("Keymaps")?;
         let addr = layer as usize * hid::LAYER_BYTES + 2 * index as usize;
         self.with_kb(|kb, _| kb.set(hid::SET_KEYS, addr, &[(word >> 8) as u8, word as u8], 0))?;
         self.writes += 1;
@@ -689,6 +847,7 @@ impl Engine {
 
     /// The raw 2048-byte macro block for one OS mode (decoded by the app).
     fn macros(&mut self, msg: &Value) -> Result<Value, String> {
+        self.require_supported("Macros")?;
         let os = int(msg.get("os"), self.mode as i64).clamp(0, 1) as usize;
         let bytes = self.with_kb(|kb, _| kb.get(hid::GET_MACRO, os * hid::MACRO_BYTES, hid::MACRO_BYTES, 0))?;
         Ok(json!({ "os": os, "bytes": bytes }))
@@ -701,6 +860,7 @@ impl Engine {
         if bytes.len() != hid::MACRO_BYTES {
             return Err(format!("macro block must be {} bytes", hid::MACRO_BYTES));
         }
+        self.require_supported("Macros")?;
         self.with_kb(|kb, _| kb.set(hid::SET_MACRO, os * hid::MACRO_BYTES, &bytes, 0))?;
         self.writes += 1;
         Ok(Value::Null)
@@ -708,6 +868,7 @@ impl Engine {
 
     /// The advanced-key tables, whole (decoded by the app). `table` picks one; without it, all three.
     fn advanced(&mut self, msg: &Value) -> Result<Value, String> {
+        self.require_supported("Advanced keys")?;
         let wanted: Vec<Table> = match msg.get("table").and_then(Value::as_str) {
             Some(name) => vec![Table::named(name).ok_or(format!("no advanced table {name:?}"))?],
             None => TABLES.to_vec(),
@@ -739,6 +900,7 @@ impl Engine {
             .ok_or("advanced_write bytes must be 0-255")?;
         let offset = usize::try_from(offset).map_err(|_| "offset out of range")?;
         t.check(offset, &bytes)?;
+        self.require_supported("Advanced keys")?;
         self.with_kb(|kb, _| kb.set(t.set, offset, &bytes, 0))?;
         self.writes += 1;
         Ok(Value::Null)
@@ -749,6 +911,9 @@ impl Engine {
     fn func(&mut self, msg: &Value) -> Result<Value, String> {
         let fields = ["stabilization", "disable_win", "disable_alt_f4", "disable_alt_tab"];
         let patch: Vec<(usize, u8)> = fields.iter().enumerate().filter_map(|(i, k)| msg.get(*k).and_then(|v| v.as_f64().or(v.as_bool().map(|b| b as u8 as f64))).map(|v| (i, v as u8))).collect();
+        if !patch.is_empty() {
+            self.require_supported("Typing settings")?;
+        }
         let b = self.with_kb(|kb, mode| {
             for (i, v) in &patch {
                 let v = if *i == 0 { (*v).clamp(1, 3) } else { (*v).min(1) };
@@ -760,6 +925,63 @@ impl Engine {
             self.writes += 1;
         }
         Ok(json!({ "stabilization": b[0].max(1), "disable_win": b[1] != 0, "disable_alt_f4": b[2] != 0, "disable_alt_tab": b[3] != 0 }))
+    }
+
+    /// Everything a tester needs to send us, read fresh from the keyboard: device info, LED count,
+    /// key matrix, light state, the stock keymap's base layers and every LED's colour. Reads only.
+    fn diagnostics(&mut self) -> Result<Value, String> {
+        if !self.connect() {
+            return Err(self.last_error.clone().unwrap_or_else(|| "keyboard not connected".into()));
+        }
+        let board = self.connected().ok_or("unknown keyboard")?;
+        let state_len = board.light_state_len(self.firmware());
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let words = |b: &[u8]| b.chunks(2).map(|w| format!("{:04x}", (w[0] as u16) << 8 | w[1] as u16)).collect::<Vec<_>>().join(" ");
+        let read = self.with_kb(|kb, mode| {
+            let base = kb.get(hid::GET_BASE, 0, 8, 0)?;
+            let fw = kb.get(hid::GET_FW, 0, 8, 0)?;
+            let lights = kb.get(hid::GET_LIGHT_COUNT, 0, 1, 0).ok().map(|b| b[0]);
+            let state = kb.get(hid::GET_LIGHT, 0, state_len, mode).ok();
+            let sleep = kb.get(hid::GET_SLEEP, 0, 4, 0).ok();
+            // The stock keymap's two base layers (Mac, Windows), sized from 0xA0 as NuPhy IO does.
+            let matrix = Matrix::from_base(&base).filter(|m| (1..=8).contains(&m.rows) && (1..=24).contains(&m.cols));
+            let mut defaults = Vec::new();
+            if let Some(m) = matrix {
+                let n = m.layer_bytes();
+                for layer in [0, 4] {
+                    defaults.push(kb.get(hid::GET_DEFAULT_KEYS, layer * n, n, 0).ok());
+                }
+            }
+            // 3 bytes per LED, 54 at a time, never past what 0xD1 said.
+            let colors = lights.and_then(|n| kb.get_chunked(hid::GET_LIGHT_COLORS, 0, 3 * n as usize, 0, 54).ok());
+            Ok((base, fw, lights, state, sleep, matrix, defaults, colors))
+        })?;
+        let (base, fw, lights, state, sleep, matrix, defaults, colors) = read;
+        let checks = Checks { lights, matrix, light_state: state.clone() };
+        Ok(json!({
+            "keylight": env!("CARGO_PKG_VERSION"),
+            "board": board.id,
+            "name": board.name(),
+            "status": if board.status == Status::Supported { "supported" } else { "experimental" },
+            "pid": format!("{:#06x}", board.pid),
+            "product": self.device.get("name"),
+            "firmware": hid::firmware_version(&fw),
+            "os_mode": self.mode,
+            "led_count": lights,
+            "expected_led_count": board.lights,
+            "key_leds": board.key_leds,
+            "side_leds": board.side_leds,
+            "matrix": matrix.map(|m| json!({ "rows": m.rows, "cols": m.cols, "extra": m.extra, "layer_bytes": m.layer_bytes() })),
+            "check": checks.problem(board).unwrap_or_else(|| "ok".into()),
+            "raw": {
+                "base_a0": hex(&base),
+                "firmware_a1": hex(&fw),
+                "light_state_d5": state.as_deref().map(hex),
+                "sleep_f3": sleep.as_deref().map(hex),
+                "default_keys_b1": { "layer0": defaults.first().cloned().flatten().as_deref().map(words), "layer4": defaults.get(1).cloned().flatten().as_deref().map(words) },
+                "led_colors_d2": colors.as_deref().map(hex),
+            },
+        }))
     }
 
     fn op_layer(&mut self, msg: &Value) -> Result<(), String> {
@@ -774,7 +996,7 @@ impl Engine {
             Some(parse_leds(v))
         } else if let (Some(keys), Some(c)) = (msg.get("keys").and_then(Value::as_array), msg.get("color").filter(|c| c.is_array())) {
             let c = rgb(Some(c), OFF);
-            let layout = self.layout();
+            let layout = self.board();
             Some(keys.iter().filter_map(|k| layout.led(k.as_str()?)).map(|l| (l, c)).collect())
         } else {
             None
@@ -800,8 +1022,12 @@ impl Engine {
         json!({
             "connected": self.kb.is_some(),
             "device": self.device,
-            "layout": self.layout().name(),
-            "layout_override": self.layout_override.map(Layout::name),
+            "layout": self.board().id,
+            "layout_override": self.layout_override,
+            "read_only": self.read_only(),
+            // Why an experimental board didn't pass its checks at connect, if it didn't.
+            "check_problem": self.connected().zip(self.checks.as_ref()).and_then(|(b, c)| c.problem(b)),
+            "experimental": self.connected().is_some_and(|b| self.experimental.contains(&b.id)),
             "error": if self.kb.is_some() { None } else { self.last_error.clone() },
             "os_mode": self.mode,
             "hyper": self.hyper,
@@ -812,7 +1038,7 @@ impl Engine {
             "base": self.base,
             "layers": self.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible, "leds": leds_json(&l.leds) })).collect::<Vec<_>>(),
             "side": self.side,
-            "frame": (0..self.layout().key_leds()).map(|l| frame.get(&l).copied().unwrap_or(OFF)).collect::<Vec<_>>(),
+            "frame": (0..self.board().key_leds).map(|l| frame.get(&l).copied().unwrap_or(OFF)).collect::<Vec<_>>(),
             "preview": self.preview.is_some(),
             "firmware_shapes": self.firmware_shapes(),
             "writes": self.writes,
@@ -899,6 +1125,139 @@ fn leds_json(leds: &Leds) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// An engine that can't open a keyboard, with a board "plugged in" by hand: plans are built,
+    /// never sent.
+    fn engine() -> Engine {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("keylight-test-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        Engine::with_hid(dir.join("state.json"), false)
+    }
+
+    fn plug(e: &mut Engine, pid: u16, firmware: &str) {
+        let b = boards::by_pid(pid).unwrap();
+        e.pid = Some(pid);
+        e.device = json!({ "board": b.id, "firmware": firmware }).as_object().unwrap().clone();
+        e.checks = (b.status == Status::Experimental).then(|| Checks {
+            lights: Some(b.lights.unwrap_or(b.key_leds + b.side_leds)),
+            matrix: Some(b.matrix),
+            light_state: Some(vec![b.custom_mode(); 17]),
+        });
+    }
+
+    fn base(e: &mut Engine, v: Value) {
+        e.base = v.as_object().unwrap().clone();
+    }
+
+    /// The light-state writes in a plan, as (offset, bytes).
+    fn lights(p: &Plan) -> Vec<(usize, Vec<u8>)> {
+        p.packets.iter().filter(|(c, _, _)| *c == hid::SET_LIGHT).map(|(_, o, d)| (*o, d.clone())).collect()
+    }
+
+    fn signal(p: &Plan) -> Option<&Vec<u8>> {
+        p.packets.iter().find(|(c, _, _)| *c == hid::SET_SIGNAL).map(|(_, _, d)| d)
+    }
+
+    #[test]
+    fn never_opens_a_keyboard_in_tests() {
+        let mut e = engine();
+        assert!(e.handle(&json!({ "op": "base", "name": "rainbow" })).is_ok());
+        assert!(e.kb.is_none() && e.writes == 0);
+        assert!(e.plan().packets.is_empty(), "nothing plugged in");
+    }
+
+    #[test]
+    fn the_air75_is_written_as_before() {
+        let mut e = engine();
+        plug(&mut e, 0x1028, "1.0.23.6");
+        let p = e.plan();
+        let l = lights(&p);
+        assert_eq!(l[0], (0, vec![21]));
+        assert_eq!(l[1], (9, vec![2, 25, 2, 0, 0, 255, 255, 255]), "side: static, as before");
+        assert_eq!(signal(&p).unwrap().len(), 84 * 4, "every key LED, the spare one too");
+    }
+
+    #[test]
+    fn experimental_boards_stay_read_only() {
+        let mut e = engine();
+        plug(&mut e, 0x102B, "1.0.5.6"); // Air65 V3
+        assert!(e.read_only().is_some());
+        assert!(e.plan().packets.is_empty(), "nothing until experimental lighting is on");
+        e.experimental.insert("air65-v3".into());
+        assert_eq!(e.read_only(), None);
+        let p = e.plan();
+        assert_eq!(lights(&p)[0], (0, vec![21]));
+        let leds: Vec<u8> = signal(&p).unwrap().chunks(4).map(|c| c[0]).collect();
+        assert_eq!(leds.len(), 68);
+        assert!(leds.iter().all(|l| *l < 68));
+        // A board that answers differently stays read-only, whatever the user picked.
+        e.checks.as_mut().unwrap().lights = Some(104);
+        assert!(e.read_only().is_some());
+        assert!(e.plan().packets.is_empty());
+        e.checks = None; // no answers at all
+        assert!(e.plan().packets.is_empty());
+    }
+
+    #[test]
+    fn never_past_an_experimental_boards_keys() {
+        let mut e = engine();
+        plug(&mut e, 0x102B, "1.0.5.6");
+        e.experimental.insert("air65-v3".into());
+        e.layout_override = Some("air65-v3-jis".into()); // 72 key LEDs
+        assert_eq!(e.board().key_leds, 72);
+        let leds: Vec<u8> = signal(&e.plan()).unwrap().chunks(4).map(|c| c[0]).collect();
+        assert!(leds.iter().all(|l| *l < 68), "{leds:?}");
+        // An override for another keyboard is ignored.
+        e.layout_override = Some("jis".into());
+        assert_eq!(e.board().id, "air65-v3");
+    }
+
+    #[test]
+    fn halo_custom_mode_and_effects() {
+        let mut e = engine();
+        plug(&mut e, 0x102C, "1.0.7.6"); // Halo75 V2
+        e.experimental.insert("halo75-v2".into());
+        assert_eq!(lights(&e.plan())[0], (0, vec![20]));
+        base(&mut e, json!({ "name": "effect", "mode": 19, "speed": 1 })); // Windmill
+        assert_eq!(lights(&e.plan())[0].1[0], 18);
+        base(&mut e, json!({ "name": "effect", "mode": 18 })); // Identify: not on Halo
+        assert_eq!(lights(&e.plan())[0].1[0], 6);
+    }
+
+    #[test]
+    fn no_shape_mode_without_firmware_shapes() {
+        let shape = json!({ "name": "shape", "shape": 0, "color": [255, 0, 0] });
+        for (pid, fw) in [(0x102A, "1.0.16.6"), (0x1029, "1.0.16.6"), (0x1028, "1.0.16.6")] {
+            let mut e = engine();
+            plug(&mut e, pid, fw);
+            base(&mut e, shape.clone());
+            let p = e.plan();
+            assert!(lights(&p).iter().all(|(o, d)| *o + d.len() <= 17 && d[0] != SHAPE_MODE), "{pid:#x}");
+            assert!(signal(&p).is_some(), "Keylight draws the heart itself");
+        }
+        let mut e = engine();
+        plug(&mut e, 0x1028, "1.0.23.6");
+        base(&mut e, shape);
+        let l = lights(&e.plan());
+        assert_eq!(l[0].1[0], SHAPE_MODE);
+        assert_eq!(l[1].0, 17);
+    }
+
+    #[test]
+    fn side_modes_per_family() {
+        let node = boards::by_pid(0x1030).unwrap();
+        let kick = boards::by_pid(0x1026).unwrap();
+        let air = boards::ansi();
+        assert_eq!(side_bytes(node, [3, 50, 2, 1, 2, 3]), [2, 50, 2, 0, 0, 1, 2, 3], "Breathe is 2 on Node");
+        assert_eq!(side_bytes(node, [2, 50, 2, 1, 2, 3]), [1, 50, 2, 0, 0, 1, 2, 3], "Static is 1");
+        assert_eq!(side_bytes(node, [4, 50, 2, 1, 2, 3]), [1, 0, 2, 0, 0, 1, 2, 3], "Off: static at 0");
+        assert_eq!(side_bytes(node, [1, 50, 2, 1, 2, 3])[1], 0, "no Neon on Node");
+        assert_eq!(side_bytes(kick, [4, 50, 2, 1, 2, 3]), [2, 0, 2, 0, 0, 1, 2, 3]);
+        assert_eq!(side_bytes(kick, [1, 50, 2, 1, 2, 3]), [1, 50, 2, 1, 0, 1, 2, 3], "Neon cycles colours");
+        assert_eq!(side_bytes(air, [4, 50, 2, 1, 2, 3]), [4, 50, 2, 0, 0, 1, 2, 3], "the Air75 keeps mode 4");
+        assert_eq!(side_bytes(air, [1, 50, 2, 1, 2, 3]), [1, 50, 2, 1, 0, 1, 2, 3]);
+    }
 
     fn table(name: &str) -> Table {
         Table::named(name).unwrap()

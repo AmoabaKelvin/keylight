@@ -1,17 +1,17 @@
-//! The NuPhy Air75 V3 vendor protocol (recovered from NuPhy IO; see docs/PROTOCOL.md).
+//! The vendor protocol of NuPhy's NuPhy IO keyboards, the Air75 V3 first (recovered from NuPhy IO;
+//! see docs/PROTOCOL.md). Every board in `boards.rs` speaks it.
 //!
 //! 64-byte reports on the vendor interface (usage page 1, usage 0): `55 cmd 00 sum | len off_lo
 //! off_hi bank | data`, everything from byte 4 XOR'd with a session key agreed by SetSecretKey.
 //! Replies start `AA cmd status`. Only the commands in `ALLOWED` can ever be sent: never the
 //! bootloader, factory reset, or keymap-wiping ones.
 
+use crate::boards;
 use hidapi::{HidApi, HidDevice};
 use std::io::Read;
 use std::time::{Duration, Instant};
 
 pub const VID: u16 = 0x19F5;
-/// The keyboard over USB: ANSI, JIS, ISO.
-pub const PIDS: [(u16, &str); 3] = [(0x1028, "cable"), (0x1029, "cable"), (0x102A, "cable")];
 /// The 2.4G dongle. It answers the handshake and its own firmware query, but doesn't pass
 /// settings through to the Air75 V3 (NuPhy IO only lists it as a dongle, not a keyboard), so
 /// it's only used to tell people to plug in the cable.
@@ -20,6 +20,10 @@ const CHUNK: usize = 56;
 
 pub const GET_BASE: u8 = 0xA0;
 pub const GET_FW: u8 = 0xA1;
+/// One byte: how many LEDs the board has, keys and side lights. A constant in every firmware.
+pub const GET_LIGHT_COUNT: u8 = 0xD1;
+/// The colour each LED shows, 3 bytes per LED in LED order. Read for diagnostics only.
+pub const GET_LIGHT_COLORS: u8 = 0xD2;
 pub const GET_LIGHT: u8 = 0xD5;
 pub const SET_LIGHT: u8 = 0xD6;
 pub const SET_SIGNAL: u8 = 0xD8;
@@ -43,11 +47,12 @@ pub const SET_TGL: u8 = 0xBC;
 /// 0xB4/0xB7/0xBA/0xBD (wipe keymaps and advanced keys), 0xFC, 0xFE and the firmware-only handlers.
 /// The advanced-key tables are read and written one entry at a time (see `engine::Table`); their
 /// reset commands are left out, and an unused entry is cleared by writing zeros.
-const ALLOWED: [u8; 21] = [
-    GET_BASE, GET_FW, GET_LIGHT, SET_LIGHT, SET_SIGNAL, SET_KEY, GET_SLEEP, SET_SLEEP, GET_DEFAULT_KEYS, GET_KEYS, SET_KEYS, GET_MACRO, SET_MACRO, GET_FUNC, SET_FUNC,
+const ALLOWED: [u8; 23] = [
+    GET_BASE, GET_FW, GET_LIGHT_COUNT, GET_LIGHT_COLORS, GET_LIGHT, SET_LIGHT, SET_SIGNAL, SET_KEY, GET_SLEEP, SET_SLEEP, GET_DEFAULT_KEYS, GET_KEYS, SET_KEYS, GET_MACRO, SET_MACRO, GET_FUNC, SET_FUNC,
     GET_SOCD, SET_SOCD, GET_TAP_DANCE, SET_TAP_DANCE, GET_TGL, SET_TGL,
 ];
-/// Bytes per keymap layer: 6 x 16 matrix plus 2 knob positions, 2 bytes each.
+/// Bytes per keymap layer on the Air75 V3: 6 x 16 matrix plus 2 knob positions, 2 bytes each.
+/// Other boards say theirs in 0xA0 (`boards::Matrix`).
 pub const LAYER_BYTES: usize = 196;
 pub const MACRO_BYTES: usize = 2048;
 
@@ -59,6 +64,8 @@ pub enum Error {
     NotLinked,
     /// Only the 2.4G dongle is plugged in; settings need the USB cable.
     DongleOnly,
+    /// A NuPhy keyboard that doesn't speak this protocol (the QMK boards). Never opened.
+    Unsupported(&'static str),
     Other(String),
 }
 
@@ -68,6 +75,7 @@ impl std::fmt::Display for Error {
             Error::Unplugged => write!(f, "unplugged"),
             Error::NotLinked => write!(f, "refused"),
             Error::DongleOnly => write!(f, "dongle"),
+            Error::Unsupported(name) => write!(f, "unsupported: {name}"),
             Error::Other(e) => write!(f, "{e}"),
         }
     }
@@ -90,18 +98,26 @@ pub struct Keyboard {
 impl Keyboard {
     pub fn open(api: &mut HidApi) -> Result<Keyboard, Error> {
         api.refresh_devices()?;
-        for (pid, link) in PIDS {
+        // Only PIDs in the board table are opened; the Air75 V3 first, as before.
+        let mut boards: Vec<&boards::Board> = boards::all().iter().collect();
+        boards.sort_by_key(|b| b.status != boards::Status::Supported);
+        for board in boards {
+            let pid = board.pid;
             let found = api.device_list().find(|d| d.vendor_id() == VID && d.product_id() == pid && d.usage_page() == 1 && d.usage() == 0);
             if let Some(info) = found {
                 let dev = info.open_device(api)?;
-                let name = info.product_string().unwrap_or("Air75 V3").to_string();
-                let mut kb = Keyboard { dev, key: 0, name, link, pid };
+                let name = info.product_string().map(str::to_string).unwrap_or_else(|| board.name());
+                let mut kb = Keyboard { dev, key: 0, name, link: "cable", pid };
                 kb.handshake()?;
                 return Ok(kb);
             }
         }
         if api.device_list().any(|d| d.vendor_id() == VID && d.product_id() == DONGLE_PID) {
             return Err(Error::DongleOnly);
+        }
+        // Seen in the device list only: nothing is opened or sent.
+        if let Some((_, name)) = boards::QMK_BOARDS.iter().find(|(pid, _)| api.device_list().any(|d| d.vendor_id() == VID && d.product_id() == *pid)) {
+            return Err(Error::Unsupported(name));
         }
         Err(Error::Unplugged)
     }
@@ -163,9 +179,15 @@ impl Keyboard {
     }
 
     pub fn get(&self, cmd: u8, offset: usize, total: usize, bank: u8) -> Result<Vec<u8>, Error> {
+        self.get_chunked(cmd, offset, total, bank, CHUNK)
+    }
+
+    /// `get` in pieces of `chunk` bytes. NuPhy IO reads 0xD2 54 bytes at a time.
+    pub fn get_chunked(&self, cmd: u8, offset: usize, total: usize, bank: u8, chunk: usize) -> Result<Vec<u8>, Error> {
+        let chunk = chunk.clamp(1, CHUNK);
         let mut out = Vec::with_capacity(total);
         while out.len() < total {
-            let n = CHUNK.min(total - out.len());
+            let n = chunk.min(total - out.len());
             let r = self.cmd(cmd, n, offset + out.len(), &[], bank)?;
             out.extend(r[8..8 + n].iter().map(|b| b ^ self.key));
         }
@@ -198,12 +220,24 @@ pub fn firmware_version(b: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ALLOWED;
+    use super::*;
 
     #[test]
     fn never_the_bootloader_resets_or_wipes() {
-        for cmd in [0xEF, 0xF1, 0xB4, 0xB7, 0xBA, 0xBD, 0xFC, 0xFE] {
+        // Plus the firmware-only handlers nobody knows the effect of.
+        for cmd in [0xEF, 0xF1, 0xB4, 0xB7, 0xBA, 0xBD, 0xFC, 0xFE, 0xC4, 0xE4, 0xF4, 0xF8, 0xF9, 0x2F, 0xE3, 0xE5] {
             assert!(!ALLOWED.contains(&cmd), "{cmd:#04x} must not be sendable");
+        }
+    }
+
+    /// The only commands that change anything on the keyboard. Everything else allowed is a read.
+    #[test]
+    fn allowed_writes() {
+        let writes = [SET_LIGHT, SET_SIGNAL, SET_KEY, SET_SLEEP, SET_KEYS, SET_MACRO, SET_FUNC, SET_SOCD, SET_TAP_DANCE, SET_TGL];
+        let reads = [GET_BASE, GET_FW, GET_LIGHT_COUNT, GET_LIGHT_COLORS, GET_LIGHT, GET_SLEEP, GET_DEFAULT_KEYS, GET_KEYS, GET_MACRO, GET_FUNC, GET_SOCD, GET_TAP_DANCE, GET_TGL];
+        assert_eq!(writes.len() + reads.len(), ALLOWED.len());
+        for cmd in ALLOWED {
+            assert!(writes.contains(&cmd) || reads.contains(&cmd), "{cmd:#04x}");
         }
     }
 }
