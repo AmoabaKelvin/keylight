@@ -303,7 +303,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
     q: 'Can it break my keyboard?',
     a: (
       <>
-        Keylight sends only commands from a fixed list of 23: device info, lighting, per-key colour, keymap, macros, advanced keys, typing and sleep settings, and the handshake. It never sends
+        Keylight sends only commands from a fixed list of 22: device info, lighting, per-key colour, keymap, macros, advanced keys, typing and sleep settings, and the handshake. It never sends
         the commands for the bootloader, factory reset or wiping keymaps, because they aren't on the list. Before the first keymap change it saves all eight layers and both macro
         banks to <code>~/Library/Application Support/Keylight/backups/</code>.
       </>

@@ -22,8 +22,6 @@ pub const GET_BASE: u8 = 0xA0;
 pub const GET_FW: u8 = 0xA1;
 /// One byte: how many LEDs the board has, keys and side lights. A constant in every firmware.
 pub const GET_LIGHT_COUNT: u8 = 0xD1;
-/// The colour each LED shows, 3 bytes per LED in LED order. Read for diagnostics only.
-pub const GET_LIGHT_COLORS: u8 = 0xD2;
 pub const GET_LIGHT: u8 = 0xD5;
 pub const SET_LIGHT: u8 = 0xD6;
 pub const SET_SIGNAL: u8 = 0xD8;
@@ -45,10 +43,12 @@ pub const GET_TGL: u8 = 0xBB;
 pub const SET_TGL: u8 = 0xBC;
 /// Everything Keylight may send. Not here, on purpose: 0xEF (bootloader), 0xF1 (factory reset),
 /// 0xB4/0xB7/0xBA/0xBD (wipe keymaps and advanced keys), 0xFC, 0xFE and the firmware-only handlers.
+/// Nor 0xD2 GetKeyLightColor: NuPhy IO reads it, but its firmware handler calls through a pointer
+/// we couldn't trace, so it isn't proven to be only a read.
 /// The advanced-key tables are read and written one entry at a time (see `engine::Table`); their
 /// reset commands are left out, and an unused entry is cleared by writing zeros.
-const ALLOWED: [u8; 23] = [
-    GET_BASE, GET_FW, GET_LIGHT_COUNT, GET_LIGHT_COLORS, GET_LIGHT, SET_LIGHT, SET_SIGNAL, SET_KEY, GET_SLEEP, SET_SLEEP, GET_DEFAULT_KEYS, GET_KEYS, SET_KEYS, GET_MACRO, SET_MACRO, GET_FUNC, SET_FUNC,
+const ALLOWED: [u8; 22] = [
+    GET_BASE, GET_FW, GET_LIGHT_COUNT, GET_LIGHT, SET_LIGHT, SET_SIGNAL, SET_KEY, GET_SLEEP, SET_SLEEP, GET_DEFAULT_KEYS, GET_KEYS, SET_KEYS, GET_MACRO, SET_MACRO, GET_FUNC, SET_FUNC,
     GET_SOCD, SET_SOCD, GET_TAP_DANCE, SET_TAP_DANCE, GET_TGL, SET_TGL,
 ];
 /// Bytes per keymap layer on the Air75 V3: 6 x 16 matrix plus 2 knob positions, 2 bytes each.
@@ -179,15 +179,9 @@ impl Keyboard {
     }
 
     pub fn get(&self, cmd: u8, offset: usize, total: usize, bank: u8) -> Result<Vec<u8>, Error> {
-        self.get_chunked(cmd, offset, total, bank, CHUNK)
-    }
-
-    /// `get` in pieces of `chunk` bytes. NuPhy IO reads 0xD2 54 bytes at a time.
-    pub fn get_chunked(&self, cmd: u8, offset: usize, total: usize, bank: u8, chunk: usize) -> Result<Vec<u8>, Error> {
-        let chunk = chunk.clamp(1, CHUNK);
         let mut out = Vec::with_capacity(total);
         while out.len() < total {
-            let n = chunk.min(total - out.len());
+            let n = CHUNK.min(total - out.len());
             let r = self.cmd(cmd, n, offset + out.len(), &[], bank)?;
             out.extend(r[8..8 + n].iter().map(|b| b ^ self.key));
         }
@@ -225,7 +219,8 @@ mod tests {
     #[test]
     fn never_the_bootloader_resets_or_wipes() {
         // Plus the firmware-only handlers nobody knows the effect of.
-        for cmd in [0xEF, 0xF1, 0xB4, 0xB7, 0xBA, 0xBD, 0xFC, 0xFE, 0xC4, 0xE4, 0xF4, 0xF8, 0xF9, 0x2F, 0xE3, 0xE5] {
+        // 0xD2 too, until its firmware handler is traced.
+        for cmd in [0xEF, 0xF1, 0xB4, 0xB7, 0xBA, 0xBD, 0xFC, 0xFE, 0xC4, 0xE4, 0xF4, 0xF8, 0xF9, 0x2F, 0xE3, 0xE5, 0xD2] {
             assert!(!ALLOWED.contains(&cmd), "{cmd:#04x} must not be sendable");
         }
     }
@@ -234,7 +229,7 @@ mod tests {
     #[test]
     fn allowed_writes() {
         let writes = [SET_LIGHT, SET_SIGNAL, SET_KEY, SET_SLEEP, SET_KEYS, SET_MACRO, SET_FUNC, SET_SOCD, SET_TAP_DANCE, SET_TGL];
-        let reads = [GET_BASE, GET_FW, GET_LIGHT_COUNT, GET_LIGHT_COLORS, GET_LIGHT, GET_SLEEP, GET_DEFAULT_KEYS, GET_KEYS, GET_MACRO, GET_FUNC, GET_SOCD, GET_TAP_DANCE, GET_TGL];
+        let reads = [GET_BASE, GET_FW, GET_LIGHT_COUNT, GET_LIGHT, GET_SLEEP, GET_DEFAULT_KEYS, GET_KEYS, GET_MACRO, GET_FUNC, GET_SOCD, GET_TAP_DANCE, GET_TGL];
         assert_eq!(writes.len() + reads.len(), ALLOWED.len());
         for cmd in ALLOWED {
             assert!(writes.contains(&cmd) || reads.contains(&cmd), "{cmd:#04x}");

@@ -123,7 +123,7 @@ echo '{"op":"state"}' | nc -U ~/Library/Application\ Support/Keylight/keylight.s
 
 Keylight writes to your keyboard's memory, so it limits what it can send:
 
-- **An allowlist of 23 commands.** Every packet goes through one function, and it refuses any command not on the list. The list covers device info, the LED count and LED colours (reads), lighting, per-key colour, keymap, macros, the SOCD, Tap Dance and Toggle tables, typing and sleep settings, and the session handshake. See `ALLOWED` in [`src-tauri/src/hid.rs`](src-tauri/src/hid.rs).
+- **An allowlist of 22 commands.** Every packet goes through one function, and it refuses any command not on the list. The list covers device info, the LED count (a read), lighting, per-key colour, keymap, macros, the SOCD, Tap Dance and Toggle tables, typing and sleep settings, and the session handshake. See `ALLOWED` in [`src-tauri/src/hid.rs`](src-tauri/src/hid.rs).
 - **Experimental boards are read first.** On a board other than the Air75 V3, Keylight only reads until you turn on experimental lighting, and even then only if the board's answers match its data. It then sends the same lighting commands it sends the Air75 V3, and nothing else.
 - **Never bootloader, reset or wipe.** Firmware update mode `0xEF`, factory reset `0xF1`, and the keymap and advanced-key wipes `0xB4`, `0xB7`, `0xBA` and `0xBD` are not on the list, so Keylight can't send them. It writes advanced keys one entry at a time, and clears an unused entry by writing zeros.
 - **Keymap backup before the first write.** Before it changes a key, Keylight saves all eight layers, both macro banks and the three advanced-key tables to `~/Library/Application Support/Keylight/backups/`.

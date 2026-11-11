@@ -205,7 +205,7 @@ function Experimental({ ctx, title }: { ctx: Ctx; title: string }) {
 }
 
 /**
- * Reads the keyboard (device info, LED count, key matrix, light state, stock keymap, LED colours)
+ * Reads the keyboard (device info, LED count, key matrix, light state, stock keymap)
  * and copies it as JSON, for testers to paste into an issue. Shows it too, in case the clipboard says no.
  */
 function CopyDiagnostics() {

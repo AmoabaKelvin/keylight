@@ -931,7 +931,7 @@ impl Engine {
     }
 
     /// Everything a tester needs to send us, read fresh from the keyboard: device info, LED count,
-    /// key matrix, light state, the stock keymap's base layers and every LED's colour. Reads only.
+    /// key matrix, light state and the stock keymap's base layers. Reads only.
     fn diagnostics(&mut self) -> Result<Value, String> {
         if !self.connect() {
             return Err(self.last_error.clone().unwrap_or_else(|| "keyboard not connected".into()));
@@ -955,11 +955,9 @@ impl Engine {
                     defaults.push(kb.get(hid::GET_DEFAULT_KEYS, layer * n, n, 0).ok());
                 }
             }
-            // 3 bytes per LED, 54 at a time, never past what 0xD1 said.
-            let colors = lights.and_then(|n| kb.get_chunked(hid::GET_LIGHT_COLORS, 0, 3 * n as usize, 0, 54).ok());
-            Ok((base, fw, lights, state, sleep, matrix, defaults, colors))
+            Ok((base, fw, lights, state, sleep, matrix, defaults))
         })?;
-        let (base, fw, lights, state, sleep, matrix, defaults, colors) = read;
+        let (base, fw, lights, state, sleep, matrix, defaults) = read;
         let checks = Checks { lights, matrix, light_state: state.clone() };
         Ok(json!({
             "keylight": env!("CARGO_PKG_VERSION"),
@@ -982,7 +980,6 @@ impl Engine {
                 "light_state_d5": state.as_deref().map(hex),
                 "sleep_f3": sleep.as_deref().map(hex),
                 "default_keys_b1": { "layer0": defaults.first().cloned().flatten().as_deref().map(words), "layer4": defaults.get(1).cloned().flatten().as_deref().map(words) },
-                "led_colors_d2": colors.as_deref().map(hex),
             },
         }))
     }
