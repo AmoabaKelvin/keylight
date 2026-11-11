@@ -915,9 +915,8 @@ impl Engine {
     fn func(&mut self, msg: &Value) -> Result<Value, String> {
         let fields = ["stabilization", "disable_win", "disable_alt_f4", "disable_alt_tab"];
         let patch: Vec<(usize, u8)> = fields.iter().enumerate().filter_map(|(i, k)| msg.get(*k).and_then(|v| v.as_f64().or(v.as_bool().map(|b| b as u8 as f64))).map(|v| (i, v as u8))).collect();
-        if !patch.is_empty() {
-            self.require_supported("Typing settings")?;
-        }
+        // Read or write, only on the Air75 V3 for now.
+        self.require_supported("Typing settings")?;
         let b = self.with_kb(|kb, mode| {
             for (i, v) in &patch {
                 let v = if *i == 0 { (*v).clamp(1, 3) } else { (*v).min(1) };

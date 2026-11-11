@@ -16,10 +16,12 @@ export function DevicePage({ ctx }: { ctx: Ctx }) {
   const { state, send } = ctx
   const [login, setLogin] = useState<boolean | null>(null)
   const [func, setFunc] = useState<Func | null>(null)
+  // Typing settings are read and written on the Air75 V3 only, for now.
+  const supported = state.device.status === 'supported'
   useEffect(() => {
-    if (state.connected) daemon<Func>({ op: 'func' }).then(setFunc).catch(() => {})
+    if (state.connected && supported) daemon<Func>({ op: 'func' }).then(setFunc).catch(() => {})
     else setFunc(null)
-  }, [state.connected])
+  }, [state.connected, supported])
   const setFuncField = (patch: Partial<Func>) => {
     setFunc((f) => f && { ...f, ...patch })
     daemon<Func>({ op: 'func', ...patch }).then(setFunc).catch(() => {})
