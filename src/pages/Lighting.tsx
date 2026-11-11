@@ -57,6 +57,9 @@ export function LightingPage({ ctx }: { ctx: Ctx }) {
         ? { look: 'breathe', seconds: 1.8 + (base.speed ?? 2) * 0.9 }
         : undefined
   const hiddenShapes = ownsKeys(base) ? state.layers.filter((l) => l.visible).length : 0
+  // Halo has no Identify effect (src-tauri/src/boards.rs `effect_mode`). Boards without a function row have five rows.
+  const effects = board.family === 'halo' ? EFFECTS.filter((e) => e.mode !== 18) : EFFECTS
+  const rowNames = board.rows.length === 5 ? ROW_NAMES.slice(1) : ROW_NAMES
 
   return (
     <Page
@@ -105,10 +108,10 @@ export function LightingPage({ ctx }: { ctx: Ctx }) {
       {base.name === 'stripes' && (
         <Row title="Rows" aside={<span className="row-note">click a row to recolour it</span>}>
           <div className="stripe-list">
-            {(base.colors ?? STRIPES).map((c, i) => (
-              <label key={i} className="stripe" title={ROW_NAMES[i]}>
+            {(base.colors ?? STRIPES).slice(0, board.rows.length).map((c, i) => (
+              <label key={i} className="stripe" title={rowNames[i]}>
                 <span className="stripe-chip" style={{ background: css(c) }} />
-                <span>{ROW_NAMES[i]}</span>
+                <span>{rowNames[i]}</span>
                 <input
                   type="color"
                   value={hex(c)}
@@ -128,7 +131,7 @@ export function LightingPage({ ctx }: { ctx: Ctx }) {
         <>
           <Row title="Effect" aside={<span className="row-note">runs on the keyboard</span>}>
             <div className="chips">
-              {EFFECTS.map((e) => (
+              {effects.map((e) => (
                 <button key={e.mode} className={`chip${e.mode === fx.mode ? ' on' : ''}`} onClick={() => apply({ ...base, mode: e.mode })}>
                   {e.name}
                 </button>

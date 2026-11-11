@@ -3,19 +3,34 @@ import { Keyboard } from '../components/Keyboard'
 import { Page } from '../components/Page'
 import { Row, Segmented, Slider, Swatches } from '../components/controls'
 import type { Side } from '../lib/api'
+import type { Board } from '../lib/layout'
 import { useThrottle } from '../lib/useDaemon'
+import { useLayout } from '../lib/useLayout'
 
+/**
+ * In the Air75 V3's numbers, which the engine turns into each board's own (boards.rs `side_mode`).
+ * Node has no Neon. Off is mode 4, which the Air boards show dark; elsewhere it's brightness 0.
+ */
 const MODES = [
   { value: 2, label: 'Static' },
   { value: 3, label: 'Breathe' },
   { value: 1, label: 'Neon' },
   { value: 4, label: 'Off' },
 ]
+const modesFor = (b: Board) => (b.family === 'node' ? MODES.filter((m) => m.value !== 1) : MODES)
+
+function where(b: Board) {
+  if (b.family === 'air75' || b.family === 'air') return 'The two light bars on the edges of the case: ten lights each side.'
+  if (b.family === 'halo') return `The light bars down the sides of the case: ${b.sideLeds} lights.`
+  return `The ${b.sideLeds} side lights on the case.`
+}
 const SPEEDS = ['Slowest', 'Slow', 'Medium', 'Fast', 'Fastest']
 
 export function SidePage({ ctx }: { ctx: Ctx }) {
   const { state, send } = ctx
   const side = state.side
+  const board = useLayout()
+  const modes = modesFor(board)
 
   const apply = (patch: Partial<Side>) => send({ op: 'side', ...patch }, (s) => ({ ...s, side: { ...s.side, ...patch } }))
   // Side-light settings are kept by the keyboard, so sliders send a few times a second at most.
@@ -24,12 +39,12 @@ export function SidePage({ ctx }: { ctx: Ctx }) {
   return (
     <Page
       title="Side lights"
-      meta="The two light bars on the edges of the case: ten lights each side."
+      meta={where(board)}
       state={state}
       board={<Keyboard frame={state.frame} side={side} sideFocus />}
     >
       <Row title="Mode">
-        <Segmented value={MODES.some((m) => m.value === side.mode) ? side.mode : 2} options={MODES} onChange={(mode) => apply({ mode })} />
+        <Segmented value={modes.some((m) => m.value === side.mode) ? side.mode : 2} options={modes} onChange={(mode) => apply({ mode })} />
         {side.mode === 1 && <p className="row-help">Neon cycles through every colour by itself.</p>}
       </Row>
       {side.mode !== 4 && side.mode !== 1 && (
