@@ -1,6 +1,9 @@
 /**
- * The Air75 V3 as drawn on screen, in its three layouts (ANSI, ISO, JIS): every key's place in key
- * units (1u = one alpha key), its LED index, and the name the engine uses for it. 16u wide, 6 rows.
+ * Every keyboard Keylight draws. The Air75 V3 is drawn by hand below, in its three layouts (ANSI,
+ * ISO, JIS): every key's place in key units (1u = one alpha key), its LED index, and the name the
+ * engine uses for it. 16u wide, 6 rows. The other NuPhy IO boards come from boards.gen.json, which
+ * scripts/gen-boards.mjs writes from NuPhy IO's layouts; their legends are borrowed from the Air75 V3
+ * by key id.
  *
  * LED indexes count keys in reading order, row by row, skipping the knob (NuPhy IO's
  * `createLightMapping` with skipPos 14 / skipSize 3, docs/KEYMAP.md §2). ISO and JIS come from NuPhy
@@ -12,8 +15,16 @@
  */
 import { DEFAULT_LAYERS, MATRIX } from './keycodes'
 import { ISO_DEFAULT_LAYERS, ISO_MATRIX, JIS_DEFAULT_LAYERS, JIS_MATRIX } from './boards'
+import generated from './boards.gen.json'
 
-export type LayoutId = 'ansi' | 'iso' | 'jis'
+/** A board id: 'ansi', 'iso', 'jis' for the Air75 V3, else e.g. 'air65-v3' or 'node75-iso'. */
+export type LayoutId = string
+
+/** Boards that light and number their modes alike (src-tauri/src/boards.rs). */
+export type Family = 'air75' | 'air' | 'kick' | 'node' | 'halo'
+
+/** What sits in the top-right corner, unlit: a knob, Kick75's round knob, or Node's touch bar. */
+export type Accessory = { kind: 'knob' | 'roundknob' | 'touchbar'; x: number; y: number; w: number; h: number }
 
 export type Key = {
   id: string
@@ -37,8 +48,21 @@ export type Key = {
 
 export type Board = {
   id: LayoutId
-  /** As people say it: "ANSI", "ISO", "JIS". */
+  /** The layout as people say it: "ANSI", "ISO", "JIS". */
   name: string
+  /** "Air75 V3", "Node75 LP". */
+  model: string
+  /** Model and layout, e.g. "Air65 V3 ISO" (just the model for ANSI). */
+  title: string
+  family: Family
+  /** Experimental boards are read until the user turns on experimental lighting. */
+  status: 'supported' | 'experimental'
+  pid: number
+  /** Size in key units. */
+  width: number
+  height: number
+  accessory: Accessory | null
+  sideLeds: number
   keys: Key[]
   byId: Map<string, Key>
   byLed: Map<number, Key>
@@ -46,9 +70,9 @@ export type Board = {
   keyLeds: number
   /** LED range [start, end) of each row, as the engine paints row-based themes. */
   rows: [number, number][]
-  /** Keymap data index -> key id (see keycodes.ts MATRIX). */
+  /** Keymap data index -> key id (see keycodes.ts MATRIX). Empty where Keylight can't remap keys yet. */
   matrix: readonly (string | null)[]
-  /** Stock keymap, 8 layers x 98 words. */
+  /** Stock keymap, 8 layers x 98 words. Empty where Keylight can't remap keys yet. */
   defaults: readonly (readonly number[])[]
   /** The key Karabiner turns into Hyper (Right ⌘). JIS has no Right ⌘. */
   hyperKey: string | null
@@ -129,10 +153,7 @@ const JIS_NAMES: Record<string, string> = {
 /** ISO and JIS Enter: 1.5u on the Tab row, 1.25u on the Caps row. */
 const TALL: Record<string, Tall> = { enter: { h: 2, w2: 1.25 } }
 
-/** The knob in the top-right corner: no LED, so it's drawn but never lit. */
-export const KNOB = { x: 15, y: 0 }
-
-/** Keycaps that come in an accent colour on the stock board. */
+/** Keycaps that come in an accent colour on the stock Air75 V3. */
 export const ACCENT: Record<string, string> = { esc: '#5fd3a6', ins: '#f4c84a' }
 
 function build(rows: Spec[][], names: Record<string, string>, tall: Record<string, Tall> = {}): Key[] {
@@ -154,22 +175,101 @@ function build(rows: Spec[][], names: Record<string, string>, tall: Record<strin
   return keys
 }
 
-function board(id: LayoutId, name: string, keys: Key[], keyLeds: number, matrix: Board['matrix'], defaults: Board['defaults']): Board {
-  const rows = Array.from({ length: HEIGHT }, (_, r): [number, number] => {
+type Meta = Omit<Board, 'keys' | 'byId' | 'byLed' | 'rows' | 'matrix' | 'defaults' | 'hyperKey' | 'keyLeds' | 'width' | 'height' | 'accessory'>
+
+function board(meta: Meta, keys: Key[], keyLeds: number, rows: [number, number][], size: Pick<Board, 'width' | 'height' | 'accessory'>, matrix: Board['matrix'] = [], defaults: Board['defaults'] = []): Board {
+  const byId = new Map(keys.map((k) => [k.id, k]))
+  return { ...meta, ...size, keys, byId, byLed: new Map(keys.map((k) => [k.led, k])), keyLeds, rows, matrix, defaults, hyperKey: byId.has('rcmd') ? 'rcmd' : null }
+}
+
+/** LED range [start, end) of each row of a hand-drawn board; the last row runs to keyLeds. */
+function rowsOf(keys: Key[], keyLeds: number): [number, number][] {
+  return Array.from({ length: HEIGHT }, (_, r): [number, number] => {
     const leds = keys.filter((k) => k.row === r).map((k) => k.led)
     return [Math.min(...leds), r === HEIGHT - 1 ? keyLeds : Math.max(...leds) + 1]
   })
-  const byId = new Map(keys.map((k) => [k.id, k]))
-  return { id, name, keys, byId, byLed: new Map(keys.map((k) => [k.led, k])), keyLeds, rows, matrix, defaults, hyperKey: byId.has('rcmd') ? 'rcmd' : null }
 }
 
-export const BOARDS: Record<LayoutId, Board> = {
-  ansi: board('ansi', 'ANSI', build(ANSI_ROWS, {}), 84, MATRIX, DEFAULT_LAYERS),
-  iso: board('iso', 'ISO', build(ISO_ROWS, ISO_NAMES, TALL), 84, ISO_MATRIX, ISO_DEFAULT_LAYERS),
-  jis: board('jis', 'JIS', build(JIS_ROWS, JIS_NAMES, TALL), 87, JIS_MATRIX, JIS_DEFAULT_LAYERS),
+type Generated = {
+  id: string
+  pid: number
+  model: string
+  variant: string
+  family: Family
+  status: 'supported' | 'experimental'
+  keyLeds: number
+  sideLeds: number
+  width?: number
+  height?: number
+  accessory?: Accessory | null
+  rows?: [number, number][]
+  /** [id, led, x, y, w, h?, w2?] */
+  keys?: (string | number)[][]
 }
 
-export const isLayout = (v: unknown): v is LayoutId => v === 'ansi' || v === 'iso' || v === 'jis'
+const DATA = (generated as { boards: Generated[] }).boards
+const metaOf = (g: Generated): Meta => ({
+  id: g.id,
+  name: g.variant,
+  model: g.model,
+  title: g.variant === 'ANSI' ? g.model : `${g.model} ${g.variant}`,
+  family: g.family,
+  status: g.status,
+  pid: g.pid,
+  sideLeds: g.sideLeds,
+})
+
+/** The Air75 V3, drawn by hand. Its knob sits top right and has no light. */
+function air75(id: 'ansi' | 'iso' | 'jis', keys: Key[], matrix: Board['matrix'], defaults: Board['defaults']): Board {
+  const g = DATA.find((b) => b.id === id)!
+  const size = { width: WIDTH, height: HEIGHT, accessory: { kind: 'knob', x: 15, y: 0, w: 1, h: 1 } as Accessory }
+  return board(metaOf(g), keys, g.keyLeds, rowsOf(keys, g.keyLeds), size, matrix, defaults)
+}
+
+const AIR75: Board[] = [
+  air75('ansi', build(ANSI_ROWS, {}), MATRIX, DEFAULT_LAYERS),
+  air75('iso', build(ISO_ROWS, ISO_NAMES, TALL), ISO_MATRIX, ISO_DEFAULT_LAYERS),
+  air75('jis', build(JIS_ROWS, JIS_NAMES, TALL), JIS_MATRIX, JIS_DEFAULT_LAYERS),
+]
+
+/** Legends for keys the Air75 V3 doesn't have: [label, tooltip name]. */
+const EXTRA: Record<string, [string, string]> = {
+  del: ['DEL', 'Delete'], ropt: ['OPT', 'Right Option'], numlock: ['NUM', 'Num Lock'], 'kp/': ['/', 'Keypad /'], 'kp*': ['*', 'Keypad *'],
+  'kp-': ['–', 'Keypad –'], 'kp+': ['+', 'Keypad +'], kpenter: ['ENTER', 'Keypad Enter'], 'kp.': ['.', 'Keypad .'], calc: ['CALC', 'Calculator'],
+  scrlk: ['SCRLK', 'Scroll Lock'], pause: ['PAUSE', 'Pause'], menu: ['MENU', 'Menu'], flex: ['SHIFT', 'Flex key'], desktop: ['DESK', 'Show desktop'],
+  ctrlcenter: ['CC', 'Control Center'], taskmgr: ['TASK', 'Task Manager'], lock: ['LOCK', 'Lock screen'], winlock: ['WIN', 'Windows key lock'],
+  stop: ['STOP', 'Stop'], next: ['NEXT', 'Next track'], prev: ['PREV', 'Previous track'], play: ['PLAY', 'Play/Pause'],
+  'light-up': ['LT+', 'Brighter'], 'light-down': ['LT–', 'Dimmer'], light: ['LT', 'Lights on/off'], 'color-loop': ['RGB', 'Next colour'],
+}
+for (let i = 0; i <= 9; i++) EXTRA[`kp${i}`] = [`${i}`, `Keypad ${i}`]
+for (let i = 13; i <= 24; i++) EXTRA[`f${i}`] = [`F${i}`, `F${i}`]
+
+/** A generated board's key: placed and lit as NuPhy IO says, with the Air75 V3's legend for its id. */
+function generatedKey(spec: (string | number)[], rows: [number, number][], legends: Map<string, Key>[]): Key {
+  const [id, led, x, y, w, h, w2] = spec as [string, number, number, number, number, number?, number?]
+  const base = id.replace(/-\d+$/, '') // a second Space is "space-2"
+  const known = legends.map((m) => m.get(base)).find(Boolean)
+  const extra = EXTRA[base]
+  const row = Math.max(0, rows.findIndex(([a, b]) => led >= a && led < b))
+  const label = known ? known.label : (extra?.[0] ?? base.toUpperCase())
+  return { id, led, label, sub: known?.sub, icon: known?.icon, name: known?.name ?? extra?.[1], x, y, w, ...(h && h !== 1 ? { h } : {}), ...(w2 ? { w2 } : {}), row }
+}
+
+const LEGENDS = { ANSI: AIR75[0].byId, ISO: AIR75[1].byId, JIS: AIR75[2].byId }
+
+const OTHERS: Board[] = DATA.filter((g) => g.keys).map((g) => {
+  const rows = g.rows!
+  const order = g.variant === 'JIS' ? [LEGENDS.JIS, LEGENDS.ISO, LEGENDS.ANSI] : g.variant === 'ISO' ? [LEGENDS.ISO, LEGENDS.ANSI] : [LEGENDS.ANSI]
+  const keys = g.keys!.map((k) => generatedKey(k, rows, order))
+  return board(metaOf(g), keys, g.keyLeds, rows, { width: g.width!, height: g.height!, accessory: g.accessory ?? null })
+})
+
+export const BOARDS: Record<LayoutId, Board> = Object.fromEntries([...AIR75, ...OTHERS].map((b) => [b.id, b]))
+
+export const isLayout = (v: unknown): v is LayoutId => typeof v === 'string' && v in BOARDS
+
+/** The boards that are the same keyboard in another layout (ANSI, ISO, JIS), this one included. */
+export const variants = (b: Board) => Object.values(BOARDS).filter((o) => o.model === b.model)
 
 export function keyName(k: Key) {
   return k.name ?? NAMES[k.id] ?? k.label
@@ -180,8 +280,8 @@ export function center(k: Key) {
 }
 
 /** The key in the same row whose centre is nearest the mirror image of this one's. */
-export function mirror(k: Key, keys: Key[]): Key {
-  const target = WIDTH - center(k).cx
+export function mirror(k: Key, keys: Key[], width = WIDTH): Key {
+  const target = width - center(k).cx
   let best = k
   let gap = Infinity
   for (const other of keys) {

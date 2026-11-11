@@ -7,7 +7,7 @@ import { BOARDS, isLayout, type Board } from './layout'
  * seen, saved across restarts), else what the device reports, else ANSI.
  */
 export function boardFor(state: DaemonState): Board {
-  const id = isLayout(state.layout) ? state.layout : isLayout(state.device.layout) ? state.device.layout : 'ansi'
+  const id = isLayout(state.layout) ? state.layout : isLayout(state.device.board) ? state.device.board : 'ansi'
   return BOARDS[id]
 }
 

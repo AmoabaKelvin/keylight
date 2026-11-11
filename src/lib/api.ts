@@ -28,17 +28,47 @@ export type Layer = { name: string; visible: boolean; leds: Record<string, RGB> 
 
 export type Side = { mode: number; brightness: number; speed: number; color: RGB }
 
+/** The keyboard plugged in, or the last one seen (src-tauri/src/engine.rs `connect`). */
+export type Device = {
+  /** USB product string. */
+  name?: string
+  firmware?: string | null
+  link?: 'cable' | 'dongle'
+  /** Board id (src/lib/boards.gen.json). `layout` is the same, for older code. */
+  board?: string
+  layout?: string
+  /** "Air65 V3 ISO". */
+  board_name?: string
+  model?: string
+  variant?: string
+  status?: 'supported' | 'experimental'
+  /** USB product ID, as "0x102b". */
+  pid?: string
+  os?: 'mac' | 'windows'
+  sleep?: Sleep
+  /** Experimental boards only, as read at connect: 0xD1 LED count, 0xA0 matrix [rows, cols, extra], 0xD5 light state. */
+  lights?: number | null
+  matrix?: [number, number, number] | null
+  light_state?: number[] | null
+}
+
 export type DaemonState = {
   connected: boolean
-  /** False when the keyboard's firmware has no built-in shapes (ISO/JIS); Keylight draws the heart itself. */
+  /** False when the keyboard's firmware has no built-in shapes (all but the ANSI Air75 V3); Keylight draws the heart itself. */
   firmware_shapes?: boolean
-  device: { name?: string; firmware?: string | null; link?: 'cable' | 'dongle'; layout?: 'ansi' | 'iso' | 'jis' | 'unknown'; os?: 'mac' | 'windows'; sleep?: Sleep }
-  /** Why it isn't connected: "bluetooth", "unplugged", or a message. */
+  device: Device
+  /** Why it isn't connected: "dongle", "unplugged", "unsupported: <name>", or a message. */
   error: string | null
-  /** The layout everything is drawn and mapped for: the override, else the board plugged in, else the last one seen. */
-  layout?: 'ansi' | 'iso' | 'jis'
+  /** The board id everything is drawn and mapped for: the override, else the board plugged in, else the last one seen. */
+  layout?: string
   /** Set on the Device page when detection is wrong; null = follow the keyboard. */
-  layout_override?: 'ansi' | 'iso' | 'jis' | null
+  layout_override?: string | null
+  /** Why Keylight only reads the board plugged in (experimental boards), or null if it writes lighting. */
+  read_only?: string | null
+  /** Experimental lighting is on for the board plugged in. */
+  experimental?: boolean
+  /** Why the experimental board plugged in didn't answer as expected; while set, it stays read-only. */
+  check_problem?: string | null
   os_mode: number
   hyper: boolean
   hyper_keys: string[]

@@ -69,7 +69,7 @@ export function ShapesPage({ ctx }: { ctx: Ctx }) {
   const paint = (k: Key) => {
     if (!editing || !draft || !stroke.current) return
     const next = { ...draft }
-    for (const key of symmetric ? [k, mirror(k, board.keys)] : [k]) {
+    for (const key of symmetric ? [k, mirror(k, board.keys, board.width)] : [k]) {
       if (stroke.current.erase) delete next[key.led]
       else next[key.led] = brush!
     }

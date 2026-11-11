@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { useState, type ReactNode, type SVGProps } from 'react'
 import { glow, type RGB } from '../lib/color'
-import { ACCENT, HEIGHT, KNOB, WIDTH, type Key } from '../lib/layout'
+import { ACCENT, type Board, type Key } from '../lib/layout'
 import { useLayout } from '../lib/useLayout'
 import { KeyIcon } from './icons'
 
@@ -9,10 +9,20 @@ const U = 60 // px per key unit in the drawing
 const PAD_X = 26 // case bezel left and right (the side lights sit in it)
 const PAD_Y = 22
 const GAP = 3 // between keycaps
-const W = WIDTH * U + PAD_X * 2
-const H = HEIGHT * U + PAD_Y * 2
-/** 20 side LEDs: ten in a short bar on each side of the function row. */
-const RAIL_SEGMENTS = 10
+
+/**
+ * Where a board's side lights are drawn: bars in the bezel, as [side, first row, rows tall, LEDs].
+ * The Air boards have ten each side of the top row. Halo's light bar runs down both sides; Kick75
+ * and Node have five LEDs, drawn on the left edge (where they sit on the case is a guess).
+ */
+function rails(b: Board): { side: 'left' | 'right'; top: number; rows: number; leds: number }[] {
+  if (b.family === 'air75' || b.family === 'air') return [{ side: 'left', top: 0, rows: 1, leds: 10 }, { side: 'right', top: 0, rows: 1, leds: 10 }]
+  if (b.family === 'halo') {
+    const half = Math.ceil(b.sideLeds / 2)
+    return [{ side: 'left', top: 0, rows: b.height, leds: half }, { side: 'right', top: 0, rows: b.height, leds: b.sideLeds - half }]
+  }
+  return [{ side: 'left', top: 0, rows: Math.min(2, b.height), leds: b.sideLeds }]
+}
 
 export type SideView = { mode: number; brightness: number; speed: number; color: RGB }
 
@@ -40,23 +50,28 @@ type Props = {
   tip?: (key: Key) => ReactNode
 }
 
-/** The Air75 V3 in the current layout (useLayout), drawn to scale with what each LED is showing. */
+/** The keyboard in the current layout (useLayout), drawn to scale with what each LED is showing. */
 export function Keyboard({ frame, side, focus, rings, badges, sideFocus, painting, motion: anim, legends, onKeyDown, onKeyEnter, tip }: Props) {
   const [hover, setHover] = useState<Key | null>(null)
-  const { keys: KEYS, name } = useLayout()
+  const board = useLayout()
+  const { keys: KEYS, title, width: WIDTH, height: HEIGHT, accessory } = board
+  const W = WIDTH * U + PAD_X * 2
+  const H = HEIGHT * U + PAD_Y * 2
+  const phase = (k: Key) => keyPhase(k, board)
 
   const sideGlow = side && side.mode !== 4 ? glow(side.color.map((v) => (v * side.brightness) / 100)) : null
   const breathe = side?.mode === 3
   const neon = side?.mode === 1
   const breatheSeconds = 1.4 + (side?.speed ?? 2) * 0.7
 
-  const rail = (x: number) =>
-    Array.from({ length: RAIL_SEGMENTS }, (_, i) => {
-      const top = PAD_Y + GAP + 2
-      const seg = (U - GAP * 2 - 4) / RAIL_SEGMENTS
+  const rail = (r: ReturnType<typeof rails>[number]) =>
+    Array.from({ length: r.leds }, (_, i) => {
+      const x = r.side === 'left' ? PAD_X / 2 - 1 : W - PAD_X / 2 + 1
+      const top = PAD_Y + r.top * U + GAP + 2
+      const seg = (r.rows * U - GAP * 2 - 4) / r.leds
       return (
         <rect
-          key={`${x}-${i}`}
+          key={`${r.side}-${i}`}
           x={x - 2}
           y={top + i * seg + 0.6}
           width={4}
@@ -68,8 +83,8 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
       )
     })
 
-  const knobX = PAD_X + KNOB.x * U + U / 2
-  const knobY = PAD_Y + KNOB.y * U + U / 2
+  const knobX = accessory ? PAD_X + accessory.x * U + U / 2 : 0
+  const knobY = accessory ? PAD_Y + accessory.y * U + U / 2 : 0
 
   return (
     <div
@@ -77,7 +92,7 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
       style={anim ? ({ '--anim': `${anim.seconds}s` } as React.CSSProperties) : undefined}
       onPointerLeave={() => setHover(null)}
     >
-      <svg viewBox={`0 0 ${W} ${H}`} className="kb-svg" role="img" aria-label={`Air75 V3 ${name}`}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="kb-svg" role="img" aria-label={title}>
         <defs>
           <filter id="kb-bloom" x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur stdDeviation="9" />
@@ -104,14 +119,8 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
 
         {/* Side lights: two short bars beside the function row. Bloom first, then the LEDs. */}
         <g className={`rails${breathe ? ' breathe' : ''}${neon ? ' neon' : ''}`} style={{ animationDuration: `${breatheSeconds}s` }}>
-          {sideGlow && (
-            <g filter="url(#kb-rail-bloom)">
-              {rail(PAD_X / 2 - 1)}
-              {rail(W - PAD_X / 2 + 1)}
-            </g>
-          )}
-          {rail(PAD_X / 2 - 1)}
-          {rail(W - PAD_X / 2 + 1)}
+          {sideGlow && <g filter="url(#kb-rail-bloom)">{rails(board).map(rail)}</g>}
+          {rails(board).map(rail)}
         </g>
 
         {/* Light spilling out from under the keys, one blur for all of them. */}
@@ -158,7 +167,7 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
           const words = (k.label.length > 2 && !/^F\d+$/.test(k.label)) || (!!legend && k.label.length > 1) || /[^\x00-\x7f]{2}/.test(k.label)
           const inkColor = lit ? g.color : 'var(--kb-legend)'
           const iconOnly = !!k.icon && !k.label
-          const accent = ACCENT[k.id]
+          const accent = board.family === 'air75' ? ACCENT[k.id] : undefined
           const ink = lit ? { fill: g.color, opacity: 0.6 + g.strength * 0.4 } : undefined
           const twoLine = !!k.sub && !badge
           return (
@@ -209,12 +218,23 @@ export function Keyboard({ frame, side, focus, rings, badges, sideFocus, paintin
           )
         })}
 
-        {/* The knob: a cap with a dial on it. It has no light under it. */}
-        <g className="knob">
-          <rect x={knobX - U / 2 + GAP} y={knobY - U / 2 + GAP} width={U - GAP * 2} height={U - GAP * 2} rx={8} fill="url(#kb-cap)" className="cap" />
-          <circle cx={knobX} cy={knobY - 2} r={17} fill="url(#kb-knob)" className="knob-dial" />
-          <path d={`M${knobX - 7} ${knobY + 5} L${knobX + 7} ${knobY - 9}`} className="knob-line" />
-        </g>
+        {/* The knob: a cap with a dial on it (Kick75's is a bare dial). Node has a touch bar. None of them light. */}
+        {accessory?.kind === 'knob' && (
+          <g className="knob">
+            <rect x={knobX - U / 2 + GAP} y={knobY - U / 2 + GAP} width={U - GAP * 2} height={U - GAP * 2} rx={8} fill="url(#kb-cap)" className="cap" />
+            <circle cx={knobX} cy={knobY - 2} r={17} fill="url(#kb-knob)" className="knob-dial" />
+            <path d={`M${knobX - 7} ${knobY + 5} L${knobX + 7} ${knobY - 9}`} className="knob-line" />
+          </g>
+        )}
+        {accessory?.kind === 'roundknob' && (
+          <g className="knob">
+            <circle cx={knobX} cy={knobY} r={U / 2 - GAP} fill="url(#kb-knob)" className="knob-dial" />
+            <path d={`M${knobX - 7} ${knobY + 7} L${knobX + 7} ${knobY - 7}`} className="knob-line" />
+          </g>
+        )}
+        {accessory?.kind === 'touchbar' && (
+          <rect x={PAD_X + accessory.x * U + GAP} y={PAD_Y + accessory.y * U + GAP} width={accessory.w * U - GAP * 2} height={accessory.h * U - GAP * 2} rx={(accessory.h * U) / 2} fill="url(#kb-cap)" className="cap" />
+        )}
       </svg>
 
       <AnimatePresence>
@@ -271,16 +291,16 @@ function rounded(points: [number, number][], r: number) {
 }
 
 /** Where in an animation cycle each key sits, for the CSS that hints at keyboard effects. */
-function phase(k: Key) {
-  return { '--x': (k.x + k.w / 2) / WIDTH, '--y': k.y / (HEIGHT - 1), '--r': ((k.led * 37) % 23) / 23 } as React.CSSProperties
+function keyPhase(k: Key, b: Board) {
+  return { '--x': (k.x + k.w / 2) / b.width, '--y': k.y / Math.max(1, b.height - 1), '--r': ((k.led * 37) % 23) / 23 } as React.CSSProperties
 }
 
 /** A thumbnail of a set of LEDs, for lists and the preset gallery. */
 export function MiniBoard({ leds, base }: { leds: Record<string, RGB>; base?: RGB[] }) {
-  const { keys: KEYS } = useLayout()
+  const { keys: KEYS, width, height, accessory } = useLayout()
   const u = 10
   return (
-    <svg viewBox={`0 0 ${WIDTH * u + 8} ${HEIGHT * u + 8}`} className="mini">
+    <svg viewBox={`0 0 ${width * u + 8} ${height * u + 8}`} className="mini">
       {KEYS.map((k) => {
         const c = leds[k.led] ?? base?.[k.led]
         const g = c ? glow(c) : null
@@ -299,7 +319,7 @@ export function MiniBoard({ leds, base }: { leds: Record<string, RGB>; base?: RG
           />
         )
       })}
-      <circle cx={4 + KNOB.x * u + u / 2} cy={4 + u / 2} r={3} className="mini-knob" />
+      {accessory && accessory.kind !== 'touchbar' && <circle cx={4 + accessory.x * u + u / 2} cy={4 + accessory.y * u + u / 2} r={3} className="mini-knob" />}
     </svg>
   )
 }

@@ -33,7 +33,7 @@ export function baseFrame(base: Base, board: Board): RGB[] {
   const frame: RGB[] = Array.from({ length: board.keyLeds }, () => OFF)
   const level = Math.max(0, Math.min(100, base.level ?? 100)) / 100
   const hearts = heart(board)
-  for (let r = 0; r < 6; r++) {
+  for (let r = 0; r < board.rows.length; r++) {
     const [start, end] = board.rows[r]
     for (let led = start; led < end; led++) {
       const t = (led - start) / Math.max(1, end - start - 1)
