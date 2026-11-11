@@ -487,8 +487,9 @@ impl Engine {
                 // An experimental board is read before anything is written, to check it's the board
                 // its PID says (boards::Checks). Reads only; a failed read just leaves it read-only.
                 self.checks = (board.status != Status::Supported).then(|| Checks {
+                    firmware: firmware.clone(),
                     lights: kb.get(hid::GET_LIGHT_COUNT, 0, 1, 0).ok().map(|b| b[0]),
-                    matrix: Matrix::from_base(&base),
+                    matrix: Matrix::read(&base, board),
                     light_state: kb.get(hid::GET_LIGHT, 0, board.light_state_len(firmware.as_deref()), self.mode).ok(),
                 });
                 self.device = json!({
@@ -947,7 +948,7 @@ impl Engine {
             let state = kb.get(hid::GET_LIGHT, 0, state_len, mode).ok();
             let sleep = kb.get(hid::GET_SLEEP, 0, 4, 0).ok();
             // The stock keymap's two base layers (Mac, Windows), sized from 0xA0 as NuPhy IO does.
-            let matrix = Matrix::from_base(&base).filter(|m| (1..=8).contains(&m.rows) && (1..=24).contains(&m.cols));
+            let matrix = Matrix::read(&base, board).filter(|m| (1..=8).contains(&m.rows) && (1..=24).contains(&m.cols));
             let mut defaults = Vec::new();
             if let Some(m) = matrix {
                 let n = m.layer_bytes();
@@ -958,7 +959,7 @@ impl Engine {
             Ok((base, fw, lights, state, sleep, matrix, defaults))
         })?;
         let (base, fw, lights, state, sleep, matrix, defaults) = read;
-        let checks = Checks { lights, matrix, light_state: state.clone() };
+        let checks = Checks { firmware: hid::firmware_version(&fw), lights, matrix, light_state: state.clone() };
         Ok(json!({
             "keylight": env!("CARGO_PKG_VERSION"),
             "board": board.id,
@@ -1140,6 +1141,7 @@ mod tests {
         e.pid = Some(pid);
         e.device = json!({ "board": b.id, "firmware": firmware }).as_object().unwrap().clone();
         e.checks = (b.status == Status::Experimental).then(|| Checks {
+            firmware: Some(firmware.to_string()),
             lights: Some(b.lights.unwrap_or(b.key_leds + b.side_leds)),
             matrix: Some(b.matrix),
             light_state: Some(vec![b.custom_mode(); 17]),
@@ -1197,6 +1199,12 @@ mod tests {
         assert!(e.plan().packets.is_empty());
         e.checks = None; // no answers at all
         assert!(e.plan().packets.is_empty());
+        // Firmware older than the research traced stays read-only, with the reason.
+        let mut old = engine();
+        plug(&mut old, 0x102B, "1.0.4.6");
+        old.experimental.insert("air65-v3".into());
+        assert!(old.read_only().unwrap().contains("1.0.5.6 or later"));
+        assert!(old.plan().packets.is_empty());
     }
 
     #[test]

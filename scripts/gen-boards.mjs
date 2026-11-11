@@ -31,15 +31,16 @@ const out = path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/lib/
  * keyLeds/sideLeds/skip are NuPhy IO's `lightCount` and `skipPos/skipSize` (RESEARCH-2026-11.md §1.2);
  * `lights` is what 0xD1 returns in NuPhy's current firmware, `matrix` what 0xA0 says (BOARDS §2.2,
  * §2.4); null where we have no firmware for that board. `status`: supported boards are written to as
- * before; experimental ones start read-only.
+ * before; experimental ones start read-only. `minFw`: the firmware the research traced for that family
+ * (BOARDS §0); older firmware keeps the board read-only, since per-key mode was only confirmed there.
  */
-const AIR75 = { family: 'air75', sideLeds: 20, skip: [14, 3], matrix: [6, 16, 2], status: 'supported' }
-const AIR65 = { family: 'air', sideLeds: 20, matrix: [5, 15, 2], status: 'experimental' }
-const AIR100 = { family: 'air', sideLeds: 20, skip: [12, 2], matrix: [6, 18, 2], status: 'experimental' }
-const KICK = { family: 'kick', sideLeds: 5, skip: [13, 3], matrix: [6, 15, 2], status: 'experimental', layout: ['E', 18739], keyLeds: 80, lights: 85 }
-const NODE75 = { family: 'node', sideLeds: 5, matrix: [6, 16, 5], status: 'experimental' }
-const NODE100 = { family: 'node', sideLeds: 5, matrix: [6, 19, 5], status: 'experimental' }
-const HALO = { family: 'halo', status: 'experimental', skip: null }
+const AIR75 = { family: 'air75', sideLeds: 20, skip: [14, 3], matrix: [6, 16, 2], status: 'supported', minFw: null }
+const AIR65 = { family: 'air', sideLeds: 20, matrix: [5, 15, 2], status: 'experimental', minFw: '1.0.5.6' }
+const AIR100 = { family: 'air', sideLeds: 20, skip: [12, 2], matrix: [6, 18, 2], status: 'experimental', minFw: '1.0.6.6' }
+const KICK = { family: 'kick', sideLeds: 5, skip: [13, 3], matrix: [6, 15, 2], status: 'experimental', layout: ['E', 18739], keyLeds: 80, lights: 85, minFw: '4.0.18.6' }
+const NODE75 = { family: 'node', sideLeds: 5, matrix: [6, 16, 5], status: 'experimental', minFw: '1.0.10.6' }
+const NODE100 = { family: 'node', sideLeds: 5, matrix: [6, 19, 5], status: 'experimental', minFw: '1.0.7.6' }
+const HALO = { family: 'halo', status: 'experimental', skip: null, minFw: '1.0.7.6' }
 
 const BOARDS = [
   // Drawn by hand; generated only to check the generator.

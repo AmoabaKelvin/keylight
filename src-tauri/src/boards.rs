@@ -52,6 +52,13 @@ impl Matrix {
         let extra = if b[5] & 0x80 != 0 { b[5] & 0x7F } else { 2 };
         Some(Matrix { rows: b[3], cols: b[4], extra })
     }
+
+    /// `from_base` for a board we know. Where the board has the usual 2 extra keys, b5 counts only if
+    /// it's exactly 0x82: Halo96 V2's firmware never writes it, so it's whatever was in the buffer.
+    pub fn read(b: &[u8], board: &Board) -> Option<Matrix> {
+        let m = Matrix::from_base(b)?;
+        if board.matrix.extra == 2 && b[5] != 0x82 { Some(Matrix { extra: 2, ..m }) } else { Some(m) }
+    }
 }
 
 pub struct Board {
@@ -65,6 +72,8 @@ pub struct Board {
     pub side_leds: u8,
     /// What 0xD1 GetLightCount returns in NuPhy's current firmware, where we have it.
     pub lights: Option<u8>,
+    /// The oldest firmware Keylight writes to: the version the research traced (experimental boards).
+    pub min_fw: Option<String>,
     pub matrix: Matrix,
     leds: HashMap<String, u8>,
     rows: Vec<(u8, u8)>,
@@ -143,6 +152,7 @@ fn parse(b: &Value) -> Board {
         key_leds,
         side_leds: n("sideLeds") as u8,
         lights: b["lights"].as_u64().map(|v| v as u8),
+        min_fw: b["minFw"].as_str().map(String::from),
         matrix,
         leds,
         rows,
@@ -239,6 +249,8 @@ pub fn version(v: &str) -> Vec<u32> {
 /// stays read-only.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Checks {
+    /// From 0xA1, as "1.0.5.6".
+    pub firmware: Option<String>,
     /// 0xD1 GetLightCount, if it answered.
     pub lights: Option<u8>,
     /// From 0xA0 GetBase.
@@ -254,6 +266,13 @@ impl Checks {
     /// - 0xA0 must give the board's matrix, so it's the board we think it is.
     /// - 0xD5 must answer at the expected length, with modes in range.
     pub fn problem(&self, board: &Board) -> Option<String> {
+        if let Some(min) = &board.min_fw {
+            match &self.firmware {
+                None => return Some("it didn't say which firmware it runs (0xA1)".into()),
+                Some(v) if version(v) < version(min) => return Some(format!("its firmware is {v}, and Keylight needs {min} or later; update it with NuPhy IO")),
+                _ => {}
+            }
+        }
         let Some(lights) = self.lights else { return Some("it didn't say how many LEDs it has (0xD1)".into()) };
         if (lights as u16) < board.key_leds as u16 + board.side_leds as u16 || board.lights.is_some_and(|l| l != lights) {
             return Some(format!("it says it has {lights} LEDs, but a {} has {}", board.name(), board.lights.unwrap_or(board.key_leds + board.side_leds)));
@@ -359,18 +378,30 @@ mod tests {
     fn checks() {
         let air65 = by_pid(0x102B).unwrap();
         let state = Some(vec![21, 100, 2, 0, 1, 0, 255, 255, 255, 2, 25, 2, 0, 0, 255, 255, 255]);
-        let good = Checks { lights: Some(88), matrix: Some(Matrix { rows: 5, cols: 15, extra: 2 }), light_state: state.clone() };
+        let fw = Some("1.0.5.6".to_string());
+        let good = Checks { firmware: fw.clone(), lights: Some(88), matrix: Some(Matrix { rows: 5, cols: 15, extra: 2 }), light_state: state.clone() };
         assert_eq!(good.problem(air65), None);
         assert!(Checks { lights: Some(89), ..good.clone() }.problem(air65).is_some(), "wrong LED count");
         assert!(Checks { lights: None, ..good.clone() }.problem(air65).is_some());
         assert!(Checks { matrix: Some(Matrix { rows: 6, cols: 16, extra: 2 }), ..good.clone() }.problem(air65).is_some(), "an Air75's matrix");
         assert!(Checks { light_state: None, ..good.clone() }.problem(air65).is_some());
+        assert!(Checks { firmware: Some("1.0.4.6".into()), ..good.clone() }.problem(air65).unwrap().contains("1.0.5.6 or later"));
+        assert!(Checks { firmware: None, ..good.clone() }.problem(air65).is_some());
+        assert_eq!(Checks { firmware: Some("1.0.10.6".into()), ..good.clone() }.problem(air65), None, "1.0.10 is newer than 1.0.5");
         // Unknown firmware count: anything that covers our LEDs.
         let iso = by_id("air100-v3-iso").unwrap();
-        let ok = Checks { lights: Some(120), matrix: Some(iso.matrix), light_state: state.clone() };
+        let ok = Checks { firmware: Some("1.0.6.6".into()), lights: Some(120), matrix: Some(iso.matrix), light_state: state.clone() };
         assert_eq!(ok.problem(iso), None);
         assert!(Checks { lights: Some(119), ..ok }.problem(iso).is_some(), "fewer LEDs than we'd write");
         assert_eq!(Matrix::from_base(&[0, 8, 4, 6, 16, 0x85, 0, 0]), Some(Matrix { rows: 6, cols: 16, extra: 5 }));
         assert_eq!(Matrix::from_base(&[0, 8, 4, 6, 18, 0, 0, 0]), Some(Matrix { rows: 6, cols: 18, extra: 2 }));
+        // Halo96 V2 leaves b5 unwritten: garbage with bit 7 set still means 2 extra keys there.
+        let halo96 = by_pid(0x102E).unwrap();
+        assert_eq!(Matrix::read(&[0, 8, 4, 6, 18, 0x9F, 0, 0], halo96), Some(Matrix { rows: 6, cols: 18, extra: 2 }));
+        assert_eq!(Matrix::read(&[0, 8, 4, 6, 18, 0x82, 0, 0], halo96), Some(halo96.matrix));
+        // Node's 5 touch-bar words are read as sent.
+        let node = by_pid(0x1030).unwrap();
+        assert_eq!(Matrix::read(&[0, 8, 4, 6, 16, 0x85, 0, 0], node), Some(node.matrix));
+        assert_eq!(Matrix::read(&[0, 8, 4, 6, 16, 0x82, 0, 0], node).map(|m| m.extra), Some(2));
     }
 }
