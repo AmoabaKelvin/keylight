@@ -39,8 +39,9 @@ export function Page({ title, meta, board, state, children, actions }: { title: 
       )}
       {state.connected && state.read_only && (
         <p className="board-note experimental">
-          {name} detected. Support is experimental, so Keylight only reads it for now: changes here are saved but not sent. Turn on experimental lighting on the Device page to
-          try them.
+          {state.check_problem
+            ? `${name} detected, but Keylight only reads it: ${state.check_problem}. Changes here are saved but not sent.`
+            : `${name} detected. Support is experimental, so Keylight only reads it for now: changes here are saved but not sent. Turn on experimental lighting on the Device page to try them.`}
         </p>
       )}
       <motion.section className="panel" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
