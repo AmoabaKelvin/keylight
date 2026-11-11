@@ -84,6 +84,11 @@ struct Layer {
     visible: bool,
 }
 
+/// `Engine::may_open`, on the sets themselves, so `connect` can use it while it holds the HID API.
+fn may_open(allowed: &BTreeSet<String>, halted: &BTreeSet<String>, b: &Board) -> bool {
+    b.status == Status::Supported || (allowed.contains(&b.id) && !halted.contains(&b.id))
+}
+
 /// What one flush sends, and what it records as sent once it has.
 #[derive(Default)]
 struct Plan {
@@ -278,8 +283,9 @@ impl Engine {
 
     /// Whether Keylight may open this board (handshake and reads). The Air75 V3 always; an
     /// experimental board once the user clicked Connect, and not again after an error until they do.
+    #[cfg(test)]
     fn may_open(&self, b: &Board) -> bool {
-        b.status == Status::Supported || (self.allowed.contains(&b.id) && !self.halted.contains(&b.id))
+        may_open(&self.allowed, &self.halted, b)
     }
 
     /// Keymaps, macros, advanced keys and keyboard settings: the Air75 V3 only, for now.
@@ -496,7 +502,7 @@ impl Engine {
         let (allowed, halted) = (&self.allowed, &self.halted);
         let mut opened = None;
         let result = (|| -> Result<(Keyboard, Vec<u8>), hid::Error> {
-            let kb = Keyboard::open(api, |b| allowed.contains(&b.id) && !halted.contains(&b.id))?;
+            let kb = Keyboard::open(api, |b| may_open(allowed, halted, b))?;
             opened = Some(kb.pid);
             let base = kb.get(hid::GET_BASE, 0, 8, 0)?;
             if base[0] > 1 {
@@ -555,7 +561,8 @@ impl Engine {
                 self.load_hyper_keys(true); // which shortcut keys exist depends on the layout
                 true
             }
-            Err(hid::Error::Waiting(board)) => {
+            Err(hid::Error::Waiting(pid)) => {
+                let board = boards::by_pid(pid).expect("hid reports only boards in the table");
                 // Seen, not opened: enough to name and draw it, and to offer Connect.
                 self.device = json!({
                     "link": "cable", "layout": board.id, "board": board.id, "model": board.model, "variant": board.variant,

@@ -67,8 +67,8 @@ pub enum Error {
     /// A NuPhy keyboard that doesn't speak this protocol (the QMK boards). Never opened.
     Unsupported(&'static str),
     /// An experimental board the user hasn't let Keylight connect to: seen in the device list only,
-    /// never opened, no handshake.
-    Waiting(&'static boards::Board),
+    /// never opened, no handshake. Holds its PID.
+    Waiting(u16),
     Other(String),
 }
 
@@ -79,7 +79,7 @@ impl std::fmt::Display for Error {
             Error::NotLinked => write!(f, "refused"),
             Error::DongleOnly => write!(f, "dongle"),
             Error::Unsupported(name) => write!(f, "unsupported: {name}"),
-            Error::Waiting(b) => write!(f, "waiting: {}", b.id),
+            Error::Waiting(pid) => write!(f, "waiting: {pid:#06x}"),
             Error::Other(e) => write!(f, "{e}"),
         }
     }
@@ -124,7 +124,7 @@ impl Keyboard {
             }
         }
         if let Some(board) = waiting {
-            return Err(Error::Waiting(board));
+            return Err(Error::Waiting(board.pid));
         }
         if api.device_list().any(|d| d.vendor_id() == VID && d.product_id() == DONGLE_PID) {
             return Err(Error::DongleOnly);
