@@ -41,7 +41,7 @@ Keylight tells boards apart by their USB product ID (System Information → USB)
 
 | Board | USB product IDs | Status |
 |---|---|---|
-| Air75 V3 (ANSI, ISO, JIS) | 0x1028, 0x102A, 0x1029 | Supported |
+| Air75 V3 (ANSI, ISO, JIS) | 0x1028, 0x102A, 0x1029 | Supported (ISO/JIS maps unchecked) |
 | Air65 V3 (ANSI, ISO, JIS) | 0x102B, 0x1040, 0x1042 | Experimental |
 | Air100 V3 (ANSI, ISO, JIS) | 0x102D, 0x1039, 0x103F | Experimental |
 | Kick75, Kick75 High | 0x1026, 0x1027 | Experimental |
@@ -52,7 +52,7 @@ Keylight tells boards apart by their USB product ID (System Information → USB)
 | Halo65, Halo75, Halo96 V2, the NuPhy IO ones (ISO for 75 and 96) | 0x102F, 0x102C, 0x102E, 0x1043, 0x1044 | Experimental |
 | Air60, Air75 and Air96 V2, Gem80, Halo V2 and Kick75 on QMK | 0x3255, 0x3246, 0x3266, 0x3275, 0x3315, 0x32F5, 0x3302, 0x32D5 | Not supported yet |
 
-**Experimental** means Keylight connects, reads the board and draws it, with an Experimental badge on the Device page. It writes nothing until you turn on **Experimental lighting** there, and only if the board answered the way Keylight expects: its LED count, key matrix and light state. Then it sets the lighting: themes, shapes, effects and side lights. Keymaps, macros, advanced keys and settings stay read-only on these boards for now. Their layouts and LED maps come from NuPhy IO's data and haven't been checked on a real board, so a key may light up in the wrong place. If you own one, **Copy diagnostics** on the Device page and paste it into an issue.
+**Experimental** means Keylight names and draws the board, with an Experimental badge on the Device page, and only talks to it once you click **Connect** there. Then it reads the board. It writes nothing until you turn on **Experimental lighting** there, and only if the board answered the way Keylight expects: its LED count, key matrix and light state. Then it sets the lighting: themes, shapes, effects and side lights. Keymaps, macros, advanced keys and settings aren't available yet on these boards. Switching experimental lighting off puts the lights back as Keylight found them. Keep NuPhy IO closed while Keylight is connected to one of these boards. Their layouts and LED maps come from NuPhy IO's data and haven't been checked on a real board, so a key may light up in the wrong place. If you own one, **Copy diagnostics** on the Device page and paste it into an issue.
 
 The QMK boards speak VIA, a different protocol, and need their own driver. Keylight sees them but doesn't open them.
 
@@ -124,7 +124,7 @@ echo '{"op":"state"}' | nc -U ~/Library/Application\ Support/Keylight/keylight.s
 Keylight writes to your keyboard's memory, so it limits what it can send:
 
 - **An allowlist of 22 commands.** Every packet goes through one function, and it refuses any command not on the list. The list covers device info, the LED count (a read), lighting, per-key colour, keymap, macros, the SOCD, Tap Dance and Toggle tables, typing and sleep settings, and the session handshake. See `ALLOWED` in [`src-tauri/src/hid.rs`](src-tauri/src/hid.rs).
-- **Experimental boards are read first.** On a board other than the Air75 V3, Keylight only reads until you turn on experimental lighting, and even then only if the board's answers match its data. It then sends the same lighting commands it sends the Air75 V3, and nothing else.
+- **Experimental boards are read first.** On a board other than the Air75 V3, Keylight sends nothing until you click Connect, then only reads until you turn on experimental lighting, and even then only if the board's answers match its data and it runs the firmware we traced or newer. It then sends the same lighting commands it sends the Air75 V3, and nothing else.
 - **Never bootloader, reset or wipe.** Firmware update mode `0xEF`, factory reset `0xF1`, and the keymap and advanced-key wipes `0xB4`, `0xB7`, `0xBA` and `0xBD` are not on the list, so Keylight can't send them. It writes advanced keys one entry at a time, and clears an unused entry by writing zeros.
 - **Keymap backup before the first write.** Before it changes a key, Keylight saves all eight layers, both macro banks and the three advanced-key tables to `~/Library/Application Support/Keylight/backups/`.
 - **Karabiner backup.** The first time Keylight edits `karabiner.json`, it copies the original to `karabiner.json.keylight-backup` next to it.
