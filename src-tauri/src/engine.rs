@@ -2,8 +2,10 @@
 //!
 //! Layers, bottom to top: the theme (base), the user's shapes, a preview (unsaved), and while
 //! Hyper is held, only the keys with Hyper shortcuts. Only LEDs that changed are written, side
-//! light writes are rate-limited, and there is no software animation, because we don't know
-//! whether the keyboard writes every change to flash.
+//! light writes are rate-limited, and there is no software animation, because the keyboard saves
+//! its lights to flash (docs/PROTOCOL.md, "Flash wear"). The Air75 V3 saves per-key colours a
+//! second after the last change, so a Hyper highlight would cost a save each time: `Save` keeps
+//! the board from making saves that would be wasted.
 //!
 //! Boards other than the Air75 V3 are experimental (boards.rs): Keylight reads them, and writes only
 //! lighting, only once the user turns that on and the board answered as expected at connect.
@@ -25,6 +27,13 @@ const HEART: [&str; 20] = ["8", "9", "-", "=", "u", "i", "o", "p", "[", "]", "j"
 const HYPER_MODS: i64 = 6912; // Carbon ⌃⌥⇧⌘
 const PREVIEW_TTL: Duration = Duration::from_secs(20);
 const SIDE_MIN_INTERVAL: Duration = Duration::from_millis(750);
+/// The Air75 V3 saves its per-key colours once no 0xD8 has changed one for a second (firmware
+/// 1.0.23.6). After this long, Keylight takes it that the board has.
+const BOARD_SAVES_AFTER: Duration = Duration::from_millis(1500);
+/// While a save would be wasted, one LED is nudged this often, well inside the board's second.
+const NUDGE_EVERY: Duration = Duration::from_millis(500);
+/// Only a channel at least this bright is nudged, so one step is under 1% of it.
+const NUDGE_MIN: u8 = 128;
 
 type Rgb = [u8; 3];
 type Leds = BTreeMap<u8, Rgb>;
@@ -98,6 +107,47 @@ struct Plan {
     repaint: bool,
     leds: Vec<(u8, Rgb)>,
     side: Option<[u8; 6]>,
+    /// The LED shown one step dimmer after this flush (`Save`).
+    nudged: Option<u8>,
+    /// The 0xD8 only moves the nudge: nothing the user would see.
+    nudge_only: bool,
+}
+
+/// What Keylight knows of the Air75 V3's per-key save (firmware 1.0.23.6, docs/PROTOCOL.md "Flash
+/// wear"): a 0xD8 that changes a colour marks them all unsaved, and once no 0xD8 has changed one for
+/// a second the board writes all 104 to flash. Showing Hyper and taking it away again would cost
+/// one such write each time, of colours the flash already has.
+///
+/// So while the save the board is waiting to make would be wasted (a highlight is up, or the
+/// colours are back to what the flash holds), Keylight keeps it waiting: every `NUDGE_EVERY` it
+/// shows one bright LED one step dimmer, or puts it back, and each change restarts the board's
+/// second. Once the colours settle on something new, the nudging stops and the board saves once.
+#[derive(Default)]
+struct Save {
+    /// The colours in the board's flash, once Keylight has seen it save them.
+    flash: Option<Leds>,
+    /// When a 0xD8 last changed a colour, while the board hasn't saved since.
+    changed: Option<Instant>,
+    /// The LED the board shows one step dimmer now.
+    nudged: Option<u8>,
+}
+
+/// The colour one step dimmer on its brightest channel.
+fn nudge(mut c: Rgb) -> Rgb {
+    let i = if c[0] >= c[1] && c[0] >= c[2] { 0 } else if c[1] >= c[2] { 1 } else { 2 };
+    c[i] = c[i].saturating_sub(1);
+    c
+}
+
+/// Where a flush sends its packets: the keyboard, or a model of one in tests.
+pub(crate) trait Wire {
+    fn set(&self, cmd: u8, offset: usize, data: &[u8], bank: u8) -> Result<(), hid::Error>;
+}
+
+impl Wire for Keyboard {
+    fn set(&self, cmd: u8, offset: usize, data: &[u8], bank: u8) -> Result<(), hid::Error> {
+        Keyboard::set(self, cmd, offset, data, bank)
+    }
 }
 
 /// The side-light block of the light state (offset 9, 8 bytes) for this board. Keylight keeps the
@@ -157,6 +207,7 @@ pub struct Engine {
     hid: bool,
     tinycast_mtime: Option<SystemTime>,
     writes: u64,
+    save: Save,
     path: PathBuf,
 }
 
@@ -202,6 +253,7 @@ impl Engine {
             hid,
             tinycast_mtime: None,
             writes: 0,
+            save: Save::default(),
             path,
         };
         e.load();
@@ -425,10 +477,15 @@ impl Engine {
     }
 
     pub fn compose(&self) -> Leds {
+        self.frame(true)
+    }
+
+    /// The frame, with or without what doesn't last: Hyper and a preview.
+    fn frame(&self, passing: bool) -> Leds {
         let layout = self.board();
         let n = layout.key_leds;
         let mut frame: Leds = (0..n).map(|l| (l, OFF)).collect();
-        if self.hyper {
+        if self.hyper && passing {
             let bound = rgb(self.hyper_style.get("bound"), [0, 230, 255]);
             for k in &self.hyper_keys {
                 if let Some(l) = layout.led(k) {
@@ -446,7 +503,7 @@ impl Engine {
                 frame.extend(layer.leds.iter().map(|(l, c)| (*l, *c)));
             }
         }
-        if let Some((p, _)) = &self.preview {
+        if let Some((p, _)) = self.preview.as_ref().filter(|_| passing) {
             frame.extend(p.iter().map(|(l, c)| (*l, *c)));
         }
         frame.retain(|l, _| *l < n); // a shape drawn on a bigger layout
@@ -552,6 +609,7 @@ impl Engine {
                 self.sent.clear();
                 self.side_sent = None;
                 self.main_sent = None;
+                self.save = Save::default();
                 self.last_error = None;
                 self.read_sleep();
                 if self.last_layout.as_deref() != Some(board.id.as_str()) {
@@ -597,6 +655,7 @@ impl Engine {
         self.sent.clear();
         self.side_sent = None;
         self.main_sent = None;
+        self.save = Save::default();
         self.last_error = Some(e.to_string());
     }
 
@@ -639,18 +698,24 @@ impl Engine {
             return;
         }
         let kb = self.kb.take().unwrap();
-        let result = self.flush_with(&kb);
+        let result = self.flush_with(&kb, Instant::now());
         self.kb = Some(kb);
         if let Err(e) = result {
             self.drop_kb(e);
         }
     }
 
-    fn flush_with(&mut self, kb: &Keyboard) -> Result<(), hid::Error> {
-        let plan = self.plan();
+    fn flush_with(&mut self, kb: &impl Wire, now: Instant) -> Result<(), hid::Error> {
+        if self.save.changed.is_some_and(|t| now.saturating_duration_since(t) >= BOARD_SAVES_AFTER) {
+            self.save.flash = Some(self.sent.iter().map(|(l, c)| (*l, *c)).collect());
+            self.save.changed = None;
+        }
+        let plan = self.plan(now);
         for (cmd, offset, data) in &plan.packets {
             kb.set(*cmd, *offset, data, self.mode)?;
-            self.writes += 1;
+            if !(*cmd == hid::SET_SIGNAL && plan.nudge_only) {
+                self.writes += 1;
+            }
         }
         if let Some(main) = plan.main {
             self.main_sent = Some(main);
@@ -658,17 +723,40 @@ impl Engine {
         if plan.repaint {
             self.sent.clear();
         }
+        if !plan.leds.is_empty() {
+            self.save.changed = Some(now);
+        }
+        self.save.nudged = plan.nudged;
         self.sent.extend(plan.leds);
         if let Some(side) = plan.side {
             self.side_sent = Some(side);
-            self.side_last = Some(Instant::now());
+            self.side_last = Some(now);
         }
         Ok(())
     }
 
+    /// The LED to show one step dimmer after this flush (`Save`), or None. Only on the Air75 V3,
+    /// whose save this is known for, and only while the board holds a change it hasn't saved.
+    fn nudge_led(&self, board: &Board, frame: &Leds, now: Instant) -> Option<u8> {
+        let changed = self.save.changed?;
+        let passing = self.hyper || self.preview.is_some();
+        let wasted = passing || self.save.flash.as_ref().is_some_and(|f| *f == self.frame(false).into_iter().filter(|(l, _)| frame.contains_key(l)).collect::<Leds>());
+        if board.status != Status::Supported || !wasted {
+            return None;
+        }
+        let bright = |l: &u8| frame.get(l).is_some_and(|c| c.iter().any(|v| *v >= NUDGE_MIN));
+        if now.saturating_duration_since(changed) < NUDGE_EVERY {
+            return self.save.nudged.filter(bright);
+        }
+        if self.save.nudged.is_some() {
+            return None; // put it back: that's a change too
+        }
+        frame.keys().copied().find(bright)
+    }
+
     /// The packets that bring the keyboard in line: light state (0xD6) and per-key colours (0xD8),
     /// nothing else. Empty when the board plugged in is read-only.
-    fn plan(&self) -> Plan {
+    fn plan(&self, now: Instant) -> Plan {
         let mut plan = Plan::default();
         let Some(board) = self.connected() else { return plan };
         if self.read_only().is_some() {
@@ -700,14 +788,22 @@ impl Engine {
             // A layout picked by hand can have more keys than the board; experimental boards never
             // get an LED past their own keys (the old 0xD8 handler doesn't bound it well).
             let limit = if board.status == Status::Supported { u8::MAX } else { board.key_leds };
-            plan.leds = self.compose().into_iter().filter(|(l, c)| *l < limit && (plan.repaint || self.sent.get(l) != Some(c))).collect();
+            let exact: Leds = self.compose().into_iter().filter(|(l, _)| *l < limit).collect();
+            plan.nudged = self.nudge_led(board, &exact, now);
+            let mut frame = exact.clone();
+            if let Some(c) = plan.nudged.and_then(|l| frame.get_mut(&l)) {
+                *c = nudge(*c);
+            }
+            plan.leds = frame.into_iter().filter(|(l, c)| plan.repaint || self.sent.get(l) != Some(c)).collect();
+            let near = |l: &u8, c: &Rgb| exact.get(l).is_some_and(|e| c == e || *c == nudge(*e));
+            plan.nudge_only = !plan.repaint && plan.leds.iter().all(|(l, c)| near(l, c) && self.sent.get(l).is_some_and(|s| near(l, s)));
             if !plan.leds.is_empty() {
                 let payload: Vec<u8> = plan.leds.iter().flat_map(|(l, c)| [*l, c[0], c[1], c[2]]).collect();
                 plan.packets.push((hid::SET_SIGNAL, 0, payload));
             }
         }
         let side = self.side_target();
-        let due = self.side_last.map_or(true, |t| t.elapsed() >= SIDE_MIN_INTERVAL);
+        let due = self.side_last.map_or(true, |t| now.saturating_duration_since(t) >= SIDE_MIN_INTERVAL);
         if self.side_sent != Some(side) && due {
             plan.packets.push((hid::SET_LIGHT, 9, side_bytes(board, side).to_vec()));
             plan.side = Some(side);
@@ -735,13 +831,18 @@ impl Engine {
         if n % 120 == 0 {
             self.load_hyper_keys(false);
         }
-        if self.kb.is_none() {
-            if n % 20 == 0 {
-                self.flush(); // retry connecting every 5 s
-            }
-        } else if (n % 4 == 0 && self.side_sent != Some(self.side_target())) || n % 40 == 0 {
+        if self.wants_flush(n) {
             self.flush();
         }
+    }
+
+    /// Whether tick `n` flushes: every 5 s to retry connecting; for side lights that were rate-limited;
+    /// every tick while the board has a change it hasn't saved (`Save`); and every 10 s anyway.
+    fn wants_flush(&self, n: u64) -> bool {
+        if self.pid.is_none() {
+            return n % 20 == 0;
+        }
+        (n % 4 == 0 && self.side_sent != Some(self.side_target())) || n % 40 == 0 || self.save.changed.is_some()
     }
 
     // ---- messages (the socket, the CLI and the app all send these) --------------------
@@ -1253,14 +1354,14 @@ mod tests {
         let mut e = engine();
         assert!(e.handle(&json!({ "op": "base", "name": "rainbow" })).is_ok());
         assert!(e.kb.is_none() && e.writes == 0);
-        assert!(e.plan().packets.is_empty(), "nothing plugged in");
+        assert!(e.plan(Instant::now()).packets.is_empty(), "nothing plugged in");
     }
 
     #[test]
     fn the_air75_is_written_as_before() {
         let mut e = engine();
         plug(&mut e, 0x1028, "1.0.23.6");
-        let p = e.plan();
+        let p = e.plan(Instant::now());
         let l = lights(&p);
         assert_eq!(l[0], (0, vec![21]));
         assert_eq!(l[1], (9, vec![2, 25, 2, 0, 0, 255, 255, 255]), "side: static, as before");
@@ -1272,10 +1373,10 @@ mod tests {
         let mut e = engine();
         plug(&mut e, 0x102B, "1.0.5.6"); // Air65 V3
         assert!(e.read_only().is_some());
-        assert!(e.plan().packets.is_empty(), "nothing until experimental lighting is on");
+        assert!(e.plan(Instant::now()).packets.is_empty(), "nothing until experimental lighting is on");
         e.experimental.insert("air65-v3".into());
         assert_eq!(e.read_only(), None);
-        let p = e.plan();
+        let p = e.plan(Instant::now());
         assert_eq!(lights(&p)[0], (0, vec![21]));
         let leds: Vec<u8> = signal(&p).unwrap().chunks(4).map(|c| c[0]).collect();
         assert_eq!(leds.len(), 68);
@@ -1283,15 +1384,15 @@ mod tests {
         // A board that answers differently stays read-only, whatever the user picked.
         e.checks.as_mut().unwrap().lights = Some(104);
         assert!(e.read_only().is_some());
-        assert!(e.plan().packets.is_empty());
+        assert!(e.plan(Instant::now()).packets.is_empty());
         e.checks = None; // no answers at all
-        assert!(e.plan().packets.is_empty());
+        assert!(e.plan(Instant::now()).packets.is_empty());
         // Firmware older than the research traced stays read-only, with the reason.
         let mut old = engine();
         plug(&mut old, 0x102B, "1.0.4.6");
         old.experimental.insert("air65-v3".into());
         assert!(old.read_only().unwrap().contains("1.0.5.6 or later"));
-        assert!(old.plan().packets.is_empty());
+        assert!(old.plan(Instant::now()).packets.is_empty());
     }
 
     #[test]
@@ -1301,7 +1402,7 @@ mod tests {
         e.experimental.insert("air65-v3".into());
         e.layout_override = Some("air65-v3-jis".into()); // 72 key LEDs
         assert_eq!(e.board().key_leds, 72);
-        let leds: Vec<u8> = signal(&e.plan()).unwrap().chunks(4).map(|c| c[0]).collect();
+        let leds: Vec<u8> = signal(&e.plan(Instant::now())).unwrap().chunks(4).map(|c| c[0]).collect();
         assert!(leds.iter().all(|l| *l < 68), "{leds:?}");
         // An override for another keyboard is ignored.
         e.layout_override = Some("jis".into());
@@ -1346,11 +1447,11 @@ mod tests {
         let mut e = engine();
         plug(&mut e, 0x102C, "1.0.7.6"); // Halo75 V2
         e.experimental.insert("halo75-v2".into());
-        assert_eq!(lights(&e.plan())[0], (0, vec![20]));
+        assert_eq!(lights(&e.plan(Instant::now()))[0], (0, vec![20]));
         base(&mut e, json!({ "name": "effect", "mode": 19, "speed": 1 })); // Windmill
-        assert_eq!(lights(&e.plan())[0].1[0], 18);
+        assert_eq!(lights(&e.plan(Instant::now()))[0].1[0], 18);
         base(&mut e, json!({ "name": "effect", "mode": 18 })); // Identify: not on Halo
-        assert_eq!(lights(&e.plan())[0].1[0], 6);
+        assert_eq!(lights(&e.plan(Instant::now()))[0].1[0], 6);
     }
 
     #[test]
@@ -1360,14 +1461,14 @@ mod tests {
             let mut e = engine();
             plug(&mut e, pid, fw);
             base(&mut e, shape.clone());
-            let p = e.plan();
+            let p = e.plan(Instant::now());
             assert!(lights(&p).iter().all(|(o, d)| *o + d.len() <= 17 && d[0] != SHAPE_MODE), "{pid:#x}");
             assert!(signal(&p).is_some(), "Keylight draws the heart itself");
         }
         let mut e = engine();
         plug(&mut e, 0x1028, "1.0.23.6");
         base(&mut e, shape);
-        let l = lights(&e.plan());
+        let l = lights(&e.plan(Instant::now()));
         assert_eq!(l[0].1[0], SHAPE_MODE);
         assert_eq!(l[1].0, 17);
     }
@@ -1397,9 +1498,180 @@ mod tests {
             let mut e = engine();
             plug(&mut e, board.pid, "1.0.23.6");
             e.side.insert("mode".into(), json!(7));
-            let side: Vec<_> = lights(&e.plan()).into_iter().filter(|(o, _)| *o == 9).collect();
+            let side: Vec<_> = lights(&e.plan(Instant::now())).into_iter().filter(|(o, _)| *o == 9).collect();
             assert_eq!(side[0].1[0], 2, "{}: an unknown mode is sent as Static", board.id);
         }
+    }
+
+    use crate::mockboard::MockBoard;
+
+    /// An engine and a stand-in Air75 V3 run through time as the app runs them: the board's idle
+    /// task every 50 ms, a tick every 250 ms, and each op flushed at once, as `handle` does.
+    struct Sim {
+        e: Engine,
+        kb: MockBoard,
+        t0: Instant,
+        ms: u64,
+        n: u64,
+    }
+
+    impl Sim {
+        fn new(pid: u16, firmware: &str) -> Sim {
+            let mut e = engine();
+            plug(&mut e, pid, firmware);
+            let t0 = Instant::now();
+            let mut sim = Sim { e, kb: MockBoard::new(t0), t0, ms: 0, n: 0 };
+            sim.flush();
+            sim
+        }
+
+        fn air75() -> Sim {
+            let mut sim = Sim::new(0x1028, "1.0.23.6");
+            sim.e.hyper_keys = ["t", "s", "f"].map(String::from).into_iter().collect();
+            sim.wait(3000); // the first frame is new to the board: saved once
+            assert_eq!(sim.kb.records(), 1);
+            sim
+        }
+
+        fn now(&self) -> Instant {
+            self.t0 + Duration::from_millis(self.ms)
+        }
+
+        fn flush(&mut self) {
+            let now = self.now();
+            self.e.flush_with(&self.kb, now).unwrap();
+        }
+
+        fn wait(&mut self, ms: u64) {
+            for _ in 0..ms / 50 {
+                self.ms += 50;
+                self.kb.run(self.now());
+                if self.ms % 250 == 0 {
+                    self.n += 1;
+                    if self.e.wants_flush(self.n) {
+                        self.flush();
+                    }
+                }
+                self.check_frame();
+            }
+        }
+
+        fn op(&mut self, msg: Value) {
+            self.e.handle(&msg).unwrap();
+            self.flush();
+        }
+
+        /// Hyper down for `ms`, then up, as Karabiner calls it.
+        fn hyper(&mut self, ms: u64) {
+            self.op(json!({ "op": "hyper", "on": true }));
+            self.wait(ms);
+            self.op(json!({ "op": "hyper", "on": false }));
+        }
+
+        /// What the board shows is the frame, but for at most one LED one step dimmer.
+        fn check_frame(&self) {
+            let ram = self.kb.ram();
+            let off: Vec<_> = self.e.compose().into_iter().filter(|(l, c)| ram[*l as usize] != *c).collect();
+            assert!(off.len() <= 1, "{off:?}");
+            for (l, c) in off {
+                assert_eq!(ram[l as usize], nudge(c), "LED {l}");
+                assert!(c.iter().max().unwrap() >= &NUDGE_MIN);
+            }
+        }
+    }
+
+    #[test]
+    fn hyper_costs_the_flash_nothing_once_the_colours_are_saved() {
+        let mut sim = Sim::air75();
+        for i in 0..200 {
+            sim.hyper(if i % 10 == 0 { 4000 } else { 300 }); // some long holds too
+            sim.wait(if i % 3 == 0 { 400 } else { 6000 });
+        }
+        assert_eq!(sim.kb.records(), 1, "nothing new to save");
+        // Keylight quits: the board saves the waiting colours once, as they are.
+        sim.kb.run(sim.now() + Duration::from_secs(2));
+        assert_eq!(sim.kb.records(), 2);
+        let frame = sim.e.compose();
+        assert!(frame.iter().filter(|(l, c)| sim.kb.flash()[**l as usize] != **c).count() <= 1);
+    }
+
+    #[test]
+    fn a_new_theme_is_saved_once_and_not_the_highlight() {
+        let mut sim = Sim::air75();
+        sim.op(json!({ "op": "base", "name": "rainbow" }));
+        sim.wait(200);
+        sim.hyper(2500); // Hyper while the board still waits to save the theme
+        sim.wait(3000);
+        assert_eq!(sim.kb.records(), 2, "the theme, once");
+        let frame = sim.e.compose();
+        assert!(frame.iter().all(|(l, c)| sim.kb.flash()[*l as usize] == *c), "the theme, exactly");
+        for _ in 0..20 {
+            sim.hyper(300);
+            sim.wait(5000);
+        }
+        assert_eq!(sim.kb.records(), 2);
+    }
+
+    #[test]
+    fn previews_and_shapes_save_only_what_stays() {
+        let mut sim = Sim::air75();
+        // Hovering over presets, then leaving them.
+        for k in ["q", "w", "e"] {
+            let mut leds = Map::new();
+            leds.insert(boards::ansi().led(k).unwrap().to_string(), json!([255, 0, 0]));
+            sim.op(json!({ "op": "preview", "leds": leds }));
+            sim.wait(1500);
+        }
+        sim.op(json!({ "op": "preview", "leds": null }));
+        sim.wait(3000);
+        assert_eq!(sim.kb.records(), 1, "nothing stayed");
+        // Painting a shape: saved once it's done.
+        for k in ["a", "s", "d", "f"] {
+            sim.op(json!({ "op": "layer", "name": "mine", "keys": [k], "color": [0, 255, 0] }));
+            sim.wait(300);
+        }
+        sim.wait(3000);
+        assert_eq!(sim.kb.records(), 2);
+    }
+
+    #[test]
+    fn a_dim_frame_is_not_nudged() {
+        let mut sim = Sim::new(0x1028, "1.0.23.6");
+        base(&mut sim.e, json!({ "name": "solid", "color": [255, 170, 110], "level": 30 }));
+        sim.flush();
+        sim.wait(3000);
+        let writes = sim.kb.records();
+        sim.hyper(300);
+        sim.wait(3000);
+        sim.hyper(4000);
+        sim.wait(3000);
+        // No LED bright enough to nudge unseen: one save a press, as before, and none during a long hold.
+        assert_eq!(sim.kb.records(), writes + 2);
+        assert!(sim.e.compose().iter().all(|(l, c)| sim.kb.ram()[*l as usize] == *c));
+    }
+
+    #[test]
+    fn nudges_are_not_counted_as_changes() {
+        let mut sim = Sim::air75();
+        sim.hyper(300);
+        let writes = sim.e.writes;
+        let packets = sim.kb.packets();
+        sim.wait(60_000);
+        assert_eq!(sim.e.writes, writes);
+        let nudges = sim.kb.packets() - packets;
+        assert!((80..=120).contains(&nudges), "about two a second, got {nudges}");
+    }
+
+    #[test]
+    fn experimental_boards_are_not_nudged() {
+        let mut sim = Sim::new(0x102B, "1.0.5.6"); // Air65 V3
+        sim.e.experimental.insert("air65-v3".into());
+        sim.flush();
+        sim.wait(3000);
+        let packets = sim.kb.packets();
+        sim.op(json!({ "op": "preview", "leds": { "1": [255, 0, 0] } }));
+        sim.wait(10_000);
+        assert_eq!(sim.kb.packets(), packets + 1, "the preview, nothing more");
     }
 
     fn table(name: &str) -> Table {

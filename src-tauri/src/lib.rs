@@ -9,6 +9,8 @@ mod engine;
 mod hid;
 mod karabiner;
 mod layout;
+#[cfg(test)]
+mod mockboard;
 mod server;
 mod update;
 
