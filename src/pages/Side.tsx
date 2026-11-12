@@ -25,6 +25,8 @@ function where(b: Board) {
   return `The ${b.sideLeds} side lights on the case.`
 }
 const SPEEDS = ['Slowest', 'Slow', 'Medium', 'Fast', 'Fastest']
+/** The Air75 V3 stops taking side speeds after Slowest (engine `side_speed`), so it starts at Slow. */
+const slowestGear = (b: Board) => (b.family === 'air75' ? 1 : 0)
 
 export function SidePage({ ctx }: { ctx: Ctx }) {
   const { state, send } = ctx
@@ -59,7 +61,7 @@ export function SidePage({ ctx }: { ctx: Ctx }) {
       )}
       {(side.mode === 3 || side.mode === 1) && (
         <Row title="Speed">
-          <Slider value={4 - side.speed} min={0} max={4} format={(v) => SPEEDS[v]} onChange={(g) => applySlow({ speed: 4 - g })} />
+          <Slider value={Math.max(4 - side.speed, slowestGear(board))} min={slowestGear(board)} max={4} format={(v) => SPEEDS[v]} onChange={(g) => applySlow({ speed: 4 - g })} />
         </Row>
       )}
       <p className="row-help foot">Caps Lock lights the side bars on its own, whatever is set here, so you can always see when it’s on.</p>

@@ -108,7 +108,8 @@ minimum, 1000K typical, at 5-45 °C (50K/200K at -40-85 °C).
   side renderer skips modes above 4 (0xf870), so after one the strips stop and later 0xD6 modes are ignored until the Fn
   side-mode key (0xe4e0, which wraps 0..4) moves it. Keylight never sends one to an Air75 V3 (`side_mode`).
 - **Side speed 4 locks host speed changes.** 0xe3f0 stores a new side speed only while the current one is 3 or less. The Fn keys
-  (0xe438) use 0..4, so after speed 4 (UI "Slowest") 0xD6 speed writes are ignored until Fn lowers it.
+  (0xe438) use 0..4, so after speed 4 (NuPhy IO's "Slowest") 0xD6 speed writes are ignored until Fn lowers it. Keylight sends
+  the Air75 V3 side speed 3 at most (`side_speed`).
 
 Keylight keeps the board from making saves that would be wasted (engine.rs, `Save`).
 

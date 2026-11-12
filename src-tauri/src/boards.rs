@@ -221,6 +221,15 @@ impl Board {
         }
     }
 
+    /// The fastest-to-slowest side speed (wire 0..4) this board may be sent. The Air75 V3's
+    /// setter stops taking host speeds once the speed is 4 (FW 0xe3f0), so it gets 3 at most.
+    pub fn side_speed(&self, speed: u8) -> u8 {
+        match self.family {
+            Family::Air75 => speed.min(3),
+            _ => speed.min(4),
+        }
+    }
+
     /// The side mode that cycles colours by itself, which gets the rainbow flag.
     pub fn side_rainbow(&self, wire: u8) -> bool {
         match self.family {

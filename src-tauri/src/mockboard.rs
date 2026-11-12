@@ -7,6 +7,8 @@
 //!   "NRGB" record (0x1468a), erasing one of the two 512-byte slots it alternates between.
 //! - 0xD6 side mode (offset 9) above 4 latches the setter (0xe2f8 only stores while the current mode
 //!   is 4 or less) and the side renderer skips its switch (0xf870). Keylight must never send it.
+//! - 0xD6 side speed (offset 11) 4 latches its setter the same way (0xe3f0 only stores while the
+//!   current speed is 3 or less).
 
 use crate::engine::Wire;
 use crate::hid;
@@ -89,6 +91,9 @@ impl Wire for MockBoard {
             hid::SET_LIGHT => {
                 if offset <= 9 && 9 < offset + data.len() {
                     assert!(data[9 - offset] <= 4, "side mode {} sent to an Air75 V3", data[9 - offset]);
+                }
+                if offset <= 11 && 11 < offset + data.len() {
+                    assert!(data[11 - offset] <= 3, "side speed {} sent to an Air75 V3", data[11 - offset]);
                 }
             }
             _ => panic!("lighting sends only 0xD6 and 0xD8, not {cmd:#04x}"),

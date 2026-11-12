@@ -161,7 +161,7 @@ fn side_bytes(board: &Board, [mode, bright, speed, r, g, b]: [u8; 6]) -> [u8; 8]
         None if mode == 4 => (fallback, 0),
         None => (fallback, bright),
     };
-    [wire, bright, speed, board.side_rainbow(wire) as u8, 0, r, g, b]
+    [wire, bright, board.side_speed(speed), board.side_rainbow(wire) as u8, 0, r, g, b]
 }
 
 pub struct Engine {
@@ -296,6 +296,16 @@ impl Engine {
         self.allowed = ids("connect");
         if let Some(o) = d.get("original_light").and_then(Value::as_object) {
             self.original_light = o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_array()?.iter().map(|b| b.as_u64().unwrap_or(0) as u8).collect()))).collect();
+        }
+        self.fit_side_speed(); // for the last board seen
+    }
+
+    /// A side speed the board can't be sent (4 on the Air75 V3) becomes the slowest it can.
+    fn fit_side_speed(&mut self) {
+        let speed = int(self.side.get("speed"), 2).clamp(0, 4) as u8;
+        let fit = self.board().side_speed(speed);
+        if fit != speed {
+            self.side.insert("speed".into(), json!(fit));
         }
     }
 
@@ -617,6 +627,7 @@ impl Engine {
                     self.save();
                 }
                 self.load_hyper_keys(true); // which shortcut keys exist depends on the layout
+                self.fit_side_speed();
                 true
             }
             Err(hid::Error::Waiting(pid)) => {
@@ -882,6 +893,7 @@ impl Engine {
                 if let Some(c) = msg.get("color").filter(|v| v.is_array()) {
                     self.side.insert("color".into(), c.clone());
                 }
+                self.fit_side_speed();
                 self.side_last = None; // the user asked: write now
                 self.save();
             }
@@ -1501,6 +1513,25 @@ mod tests {
             let side: Vec<_> = lights(&e.plan(Instant::now())).into_iter().filter(|(o, _)| *o == 9).collect();
             assert_eq!(side[0].1[0], 2, "{}: an unknown mode is sent as Static", board.id);
         }
+    }
+
+    #[test]
+    fn never_side_speed_4_on_an_air75() {
+        // At 4, the Air75 V3's side-speed setter stops taking new speeds (FW 0xe3f0).
+        for board in boards::all().iter().filter(|b| b.family == boards::Family::Air75) {
+            for speed in 0..=255u8 {
+                assert!(side_bytes(board, [2, 50, speed, 1, 2, 3])[2] <= 3, "{} speed {speed}", board.id);
+            }
+        }
+        assert_eq!(side_bytes(boards::by_pid(0x1030).unwrap(), [2, 50, 4, 1, 2, 3])[2], 4, "Node keeps its slowest");
+        // A saved 4 becomes 3, and so does one the app asks for.
+        let mut e = engine();
+        e.side.insert("speed".into(), json!(4));
+        e.save();
+        let mut e = Engine::with_hid(e.path.clone(), false);
+        assert_eq!(e.side["speed"], json!(3));
+        e.handle(&json!({ "op": "side", "speed": 4 })).unwrap();
+        assert_eq!(e.side["speed"], json!(3));
     }
 
     use crate::mockboard::MockBoard;
