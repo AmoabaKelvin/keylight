@@ -34,6 +34,8 @@ const BOARD_SAVES_AFTER: Duration = Duration::from_millis(1500);
 const NUDGE_EVERY: Duration = Duration::from_millis(500);
 /// Only a channel at least this bright is nudged, so one step is under 1% of it.
 const NUDGE_MIN: u8 = 128;
+/// The board is held from saving for at most this long after the colours last really changed.
+const HOLD_FOR: Duration = Duration::from_secs(600);
 
 type Rgb = [u8; 3];
 type Leds = BTreeMap<u8, Rgb>;
@@ -121,13 +123,17 @@ struct Plan {
 /// So while the save the board is waiting to make would be wasted (a highlight is up, or the
 /// colours are back to what the flash holds), Keylight keeps it waiting: every `NUDGE_EVERY` it
 /// shows one bright LED one step dimmer, or puts it back, and each change restarts the board's
-/// second. Once the colours settle on something new, the nudging stops and the board saves once.
+/// second. Once the colours settle on something new, or `HOLD_FOR` after they last changed, the
+/// nudging stops and the board saves once. 0xD8 doesn't restart the board's sleep timers, which only
+/// keys and power changes do, so the nudging doesn't keep it awake.
 #[derive(Default)]
 struct Save {
     /// The colours in the board's flash, once Keylight has seen it save them.
     flash: Option<Leds>,
     /// When a 0xD8 last changed a colour, while the board hasn't saved since.
     changed: Option<Instant>,
+    /// When a 0xD8 last changed a colour other than by a nudge: Hyper, a theme, a shape.
+    real: Option<Instant>,
     /// The LED the board shows one step dimmer now.
     nudged: Option<u8>,
 }
@@ -736,6 +742,9 @@ impl Engine {
         }
         if !plan.leds.is_empty() {
             self.save.changed = Some(now);
+            if !plan.nudge_only {
+                self.save.real = Some(now);
+            }
         }
         self.save.nudged = plan.nudged;
         self.sent.extend(plan.leds);
@@ -752,7 +761,8 @@ impl Engine {
         let changed = self.save.changed?;
         let passing = self.hyper || self.preview.is_some();
         let wasted = passing || self.save.flash.as_ref().is_some_and(|f| *f == self.frame(false).into_iter().filter(|(l, _)| frame.contains_key(l)).collect::<Leds>());
-        if board.status != Status::Supported || !wasted {
+        let held_long = self.save.real.is_some_and(|t| now.saturating_duration_since(t) >= HOLD_FOR);
+        if board.status != Status::Supported || !wasted || held_long {
             return None;
         }
         let bright = |l: &u8| frame.get(l).is_some_and(|c| c.iter().any(|v| *v >= NUDGE_MIN));
@@ -1679,6 +1689,23 @@ mod tests {
         // No LED bright enough to nudge unseen: one save a press, as before, and none during a long hold.
         assert_eq!(sim.kb.records(), writes + 2);
         assert!(sim.e.compose().iter().all(|(l, c)| sim.kb.ram()[*l as usize] == *c));
+    }
+
+    #[test]
+    fn the_board_is_held_ten_minutes_at_most() {
+        let mut sim = Sim::air75();
+        sim.hyper(300);
+        sim.wait(9 * 60_000);
+        assert_eq!(sim.kb.records(), 1, "held");
+        sim.wait(2 * 60_000);
+        assert_eq!(sim.kb.records(), 2, "saved once, ten minutes after Hyper");
+        let packets = sim.kb.packets();
+        sim.wait(60_000);
+        assert_eq!(sim.kb.packets(), packets, "no more nudging");
+        assert!(sim.e.compose().iter().all(|(l, c)| sim.kb.flash()[*l as usize] == *c), "saved as shown");
+        sim.hyper(300); // Hyper again: held again
+        sim.wait(60_000);
+        assert_eq!(sim.kb.records(), 2);
     }
 
     #[test]

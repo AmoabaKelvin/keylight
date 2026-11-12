@@ -110,6 +110,9 @@ minimum, 1000K typical, at 5-45 °C (50K/200K at -40-85 °C).
 - **Side speed 4 locks host speed changes.** 0xe3f0 stores a new side speed only while the current one is 3 or less. The Fn keys
   (0xe438) use 0..4, so after speed 4 (NuPhy IO's "Slowest") 0xD6 speed writes are ignored until Fn lowers it. Keylight sends
   the Air75 V3 side speed 3 at most (`side_speed`).
+- **Vendor commands don't restart the sleep timers.** The sleep (0x2000307c) and deep-sleep (0x20003092) counters are reset
+  only by key events (0x113c2), power and USB state changes (0x10eea), connection changes, and the sleep task itself; nothing in
+  the command dispatcher (0x159d2) or the 0xD8 handler touches them.
 
 Keylight keeps the board from making saves that would be wasted (engine.rs, `Save`).
 
