@@ -90,6 +90,28 @@ Enum also aliases `OFF_MODE = 4` with RHYTHM (matches the observation that 4 loo
 skips key positions 15-17 (the knob/accessory keys have no LED): `led = pos` for pos <= 14, `pos - 3` for pos >= 18.
 0xD8 payload is `[led,R,G,B]` repeated, bank = OS mode, and only takes effect in main mode 21.
 
+## Flash wear (firmware 1.0.23.6 ANSI, file offsets) [fw]
+The board saves lighting to its 32 KB DataFlash through the WCH ROM call at 0x2000014e (`FLASH_EEPROM_CMD`: 9 erase, 0xA write,
+0xB read; WCH `ISP583.h`: erase unit 256 B). The CH583 datasheet (V1.9, Table 20-9) rates Flash-ROM at 100K erase/program cycles
+minimum, 1000K typical, at 5-45 °C (50K/200K at -40-85 °C).
+- **0xD8 per-key colours.** The handler (0x157ee) compares each colour with RAM (0x20005244) and, if one changed, sets the unsaved
+  flag (0x200030d0) and stamps the time. The idle task (0x149c6) saves once the flag is set and more than 999 ms have passed:
+  0x1468a builds a 512-byte "NRGB" record (sequence number, OS mode, 104 RGB, CRC-16) and erases and writes one 512-byte slot.
+  Each OS mode has two slots at DataFlash 0x4700 + 0x400·(mode 0) + 0x200·slot, written in turn; the loader (0x143b8) keeps the
+  newer valid one. So every record costs one erase of two 256-byte pages, and each page is erased once every two records. The
+  flag only clears by saving: a highlight shown and taken away again within the second still costs a record.
+- **0xD6 light state.** SetLight (0x151b4) parses byte by byte. Brightness, speed, direction, isRGB, RGB and shape fields are
+  saved through 0x155ca, which compares with flash first and writes only a change; a change re-erases the one 256-byte page
+  at 0x5400 (Mac 0x443.., Windows 0x47f..), with no rotation. The mode setters (main 0xcdb0, side 0xe2f8, side speed 0xe3f0) only
+  set RAM in this path.
+- **Side mode above 4 locks the side lights.** 0xe2f8 stores a new side mode only while the current one is 4 or less, and the
+  side renderer skips modes above 4 (0xf870), so after one the strips stop and later 0xD6 modes are ignored until the Fn
+  side-mode key (0xe4e0, which wraps 0..4) moves it. Keylight never sends one to an Air75 V3 (`side_mode`).
+- **Side speed 4 locks host speed changes.** 0xe3f0 stores a new side speed only while the current one is 3 or less. The Fn keys
+  (0xe438) use 0..4, so after speed 4 (UI "Slowest") 0xD6 speed writes are ignored until Fn lowers it.
+
+Keylight keeps the board from making saves that would be wasted (engine.rs, `Save`).
+
 ## Keymap - D ~88133-88230, ~89153-89330, ~91475 [code]
 8 layers: layer L sits at address `L*196` (0xB2 read / 0xB3 write, bank 0). OS mode = `L // 4` (0-3 Mac, 4-7 Win), so layer 0 of
 each mode is the base layer and 1-3 are Fn layers. Each key is 2 bytes; position order is matrix order (row*16+col), then the
