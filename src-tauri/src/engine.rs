@@ -760,7 +760,9 @@ impl Engine {
         let passing = self.hyper || self.preview.is_some();
         let wasted = passing || self.save.flash.as_ref().is_some_and(|f| *f == self.frame(false));
         let held_long = self.save.real.is_some_and(|t| now.saturating_duration_since(t) >= HOLD_FOR);
-        board.status == Status::Supported && wasted && !held_long && now.saturating_duration_since(changed) >= NUDGE_EVERY
+        // An effect or shape theme only paints keys for Hyper, the same each time, so the board saves
+        // the highlight once and never again; a poke would make every Hyper cost a save.
+        !self.owns_keys() && board.status == Status::Supported && wasted && !held_long && now.saturating_duration_since(changed) >= NUDGE_EVERY
     }
 
     /// The packets that bring the keyboard in line: light state (0xD6) and per-key colours (0xD8),
@@ -1597,6 +1599,9 @@ mod tests {
 
         /// The keys show exactly the frame: pokes go to a side LED, which per-key mode doesn't show.
         fn check_frame(&self) {
+            if self.e.main_target(self.e.connected().unwrap()) != Main::Custom {
+                return; // an effect: the board draws the keys itself
+            }
             let shown = self.kb.shown();
             let off: Vec<_> = self.e.compose().into_iter().filter(|(l, c)| shown.get(*l as usize) != Some(c)).collect();
             assert!(off.is_empty(), "{off:?}");
@@ -1698,6 +1703,22 @@ mod tests {
         sim.hyper(300); // Hyper again: held again
         sim.wait(60_000);
         assert_eq!(sim.kb.records(), 2);
+    }
+
+    #[test]
+    fn effect_themes_save_the_highlight_once() {
+        for theme in [json!({ "op": "base", "name": "effect", "mode": 6 }), json!({ "op": "base", "name": "shape", "shape": 0 })] {
+            let mut sim = Sim::air75();
+            sim.op(theme);
+            sim.hyper(2000); // the first highlight is new to the board
+            sim.wait(3000);
+            let records = sim.kb.records();
+            for _ in 0..30 {
+                sim.hyper(2000);
+                sim.wait(3000);
+            }
+            assert_eq!(sim.kb.records(), records);
+        }
     }
 
     #[test]
