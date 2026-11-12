@@ -62,6 +62,7 @@ export function SidePage({ ctx }: { ctx: Ctx }) {
       {(side.mode === 3 || side.mode === 1) && (
         <Row title="Speed">
           <Slider value={Math.max(4 - side.speed, slowestGear(board))} min={slowestGear(board)} max={4} format={(v) => SPEEDS[v]} onChange={(g) => applySlow({ speed: 4 - g })} />
+          {board.family === 'air75' && <p className="row-help">If side speed was set to Slowest on the keyboard or in NuPhy IO, lower it with Fn first.</p>}
         </Row>
       )}
       <p className="row-help foot">Caps Lock lights the side bars on its own, whatever is set here, so you can always see when it’s on.</p>

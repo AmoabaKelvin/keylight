@@ -312,16 +312,6 @@ impl Engine {
         if let Some(o) = d.get("original_light").and_then(Value::as_object) {
             self.original_light = o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_array()?.iter().map(|b| b.as_u64().unwrap_or(0) as u8).collect()))).collect();
         }
-        self.fit_side_speed(); // for the last board seen
-    }
-
-    /// A side speed the board can't be sent (4 on the Air75 V3) becomes the slowest it can.
-    fn fit_side_speed(&mut self) {
-        let speed = int(self.side.get("speed"), 2).clamp(0, 4) as u8;
-        let fit = self.board().side_speed(speed);
-        if fit != speed {
-            self.side.insert("speed".into(), json!(fit));
-        }
     }
 
     /// The board to map keys and LEDs for: the override, else the keyboard's, else the last one seen,
@@ -642,7 +632,6 @@ impl Engine {
                     self.save();
                 }
                 self.load_hyper_keys(true); // which shortcut keys exist depends on the layout
-                self.fit_side_speed();
                 true
             }
             Err(hid::Error::Waiting(pid)) => {
@@ -912,7 +901,6 @@ impl Engine {
                 if let Some(c) = msg.get("color").filter(|v| v.is_array()) {
                     self.side.insert("color".into(), c.clone());
                 }
-                self.fit_side_speed();
                 self.side_last = None; // the user asked: write now
                 self.save();
             }
@@ -1543,14 +1531,13 @@ mod tests {
             }
         }
         assert_eq!(side_bytes(boards::by_pid(0x1030).unwrap(), [2, 50, 4, 1, 2, 3])[2], 4, "Node keeps its slowest");
-        // A saved 4 becomes 3, and so does one the app asks for.
+        // A saved 4 stays saved (other boards take it) and goes out as 3.
         let mut e = engine();
-        e.side.insert("speed".into(), json!(4));
-        e.save();
-        let mut e = Engine::with_hid(e.path.clone(), false);
-        assert_eq!(e.side["speed"], json!(3));
+        plug(&mut e, 0x1028, "1.0.23.6");
         e.handle(&json!({ "op": "side", "speed": 4 })).unwrap();
-        assert_eq!(e.side["speed"], json!(3));
+        assert_eq!(e.side["speed"], json!(4));
+        let side: Vec<_> = lights(&e.plan(Instant::now())).into_iter().filter(|(o, _)| *o == 9).collect();
+        assert_eq!(side[0].1[2], 3);
     }
 
     use crate::mockboard::MockBoard;
