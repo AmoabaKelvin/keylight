@@ -29,9 +29,9 @@ const PREVIEW_TTL: Duration = Duration::from_secs(20);
 const SIDE_MIN_INTERVAL: Duration = Duration::from_millis(750);
 /// The Air75 V3 saves its per-key colours once no 0xD8 has changed one for a second (firmware
 /// 1.0.23.6). After this long, Keylight takes it that the board has.
+const BOARD_SAVES_AFTER: Duration = Duration::from_millis(1500);
 /// The one board and firmware whose save was traced; `Save` holds saves on it only.
 const TRACED: (u16, &str) = (0x1028, "1.0.23.6");
-const BOARD_SAVES_AFTER: Duration = Duration::from_millis(1500);
 /// While a save would be wasted, the hidden LED is poked this often, well inside the board's second.
 const NUDGE_EVERY: Duration = Duration::from_millis(500);
 /// Pokes need the board's OS mode to be the bank Keylight writes, read no longer ago than this.
@@ -142,6 +142,15 @@ struct Save {
     /// 0xD8 to the other OS mode's bank goes to that mode's colours, and saves at once when they
     /// aren't the ones loaded and the loaded ones are unsaved (FW 0x15844-0x1590a).
     mode_seen: Option<(Instant, bool)>,
+}
+
+impl Save {
+    /// Pokes start from a random colour, so the first is unlikely to be what the flash already has.
+    fn new() -> Save {
+        use std::hash::{BuildHasher, Hasher};
+        let seed = std::collections::hash_map::RandomState::new().build_hasher().finish() as u8;
+        Save { pokes: seed, ..Save::default() }
+    }
 }
 
 /// The LED poked to hold a save: the first side LED, inside the board's own range.
@@ -268,7 +277,7 @@ impl Engine {
             hid,
             tinycast_mtime: None,
             writes: 0,
-            save: Save::default(),
+            save: Save::new(),
             path,
         };
         e.load();
@@ -624,7 +633,7 @@ impl Engine {
                 self.sent.clear();
                 self.side_sent = None;
                 self.main_sent = None;
-                self.save = Save::default();
+                self.save = Save::new();
                 self.last_error = None;
                 self.read_sleep();
                 if self.last_layout.as_deref() != Some(board.id.as_str()) {
@@ -670,7 +679,7 @@ impl Engine {
         self.sent.clear();
         self.side_sent = None;
         self.main_sent = None;
-        self.save = Save::default();
+        self.save = Save::new();
         self.last_error = Some(e.to_string());
     }
 
@@ -1696,6 +1705,12 @@ mod tests {
     }
 
     #[test]
+    fn poke_colours_start_at_random() {
+        let seeds: BTreeSet<u8> = (0..20).map(|_| Save::new().pokes).collect();
+        assert!(seeds.len() > 1);
+    }
+
+    #[test]
     fn pokes_go_to_the_first_side_led_only() {
         let mut sim = Sim::air75();
         let before = sim.kb.ram();
@@ -1782,15 +1797,15 @@ mod tests {
     }
 
     #[test]
-    fn nudges_are_not_counted_as_changes() {
+    fn pokes_are_not_counted_as_changes() {
         let mut sim = Sim::air75();
         sim.hyper(300);
         let writes = sim.e.writes;
         let packets = sim.kb.packets();
         sim.wait(60_000);
         assert_eq!(sim.e.writes, writes);
-        let nudges = sim.kb.packets() - packets;
-        assert!((80..=120).contains(&nudges), "about two a second, got {nudges}");
+        let pokes = sim.kb.packets() - packets;
+        assert!((80..=120).contains(&pokes), "about two a second, got {pokes}");
     }
 
     #[test]
