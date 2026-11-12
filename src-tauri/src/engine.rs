@@ -1387,6 +1387,21 @@ mod tests {
         assert_eq!(side_bytes(air, [1, 50, 2, 1, 2, 3]), [1, 50, 2, 1, 0, 1, 2, 3]);
     }
 
+    #[test]
+    fn never_side_mode_5_or_more_on_an_air75() {
+        // Above 4, the Air75 V3's side-mode setter stops taking new modes (FW 0xe2f8).
+        for board in boards::all().iter().filter(|b| b.family == boards::Family::Air75) {
+            for mode in 0..=255u8 {
+                assert!(side_bytes(board, [mode, 50, 2, 1, 2, 3])[0] <= 4, "{} mode {mode}", board.id);
+            }
+            let mut e = engine();
+            plug(&mut e, board.pid, "1.0.23.6");
+            e.side.insert("mode".into(), json!(7));
+            let side: Vec<_> = lights(&e.plan()).into_iter().filter(|(o, _)| *o == 9).collect();
+            assert_eq!(side[0].1[0], 2, "{}: an unknown mode is sent as Static", board.id);
+        }
+    }
+
     fn table(name: &str) -> Table {
         Table::named(name).unwrap()
     }
