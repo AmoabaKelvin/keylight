@@ -725,7 +725,8 @@ impl Engine {
             self.save.flash = Some(self.sent.iter().map(|(l, c)| (*l, *c)).collect());
             self.save.changed = None;
         }
-        let stale = self.save.mode_seen.is_none_or(|(t, _)| now.saturating_duration_since(t) >= MODE_FRESH);
+        // A match is trusted for MODE_FRESH; a mismatch is read again, since the board saves soon anyway.
+        let stale = self.save.mode_seen.is_none_or(|(t, ok)| !ok || now.saturating_duration_since(t) >= MODE_FRESH);
         if stale && self.connected().is_some_and(|b| self.pokes(b, now)) {
             let base = kb.get(hid::GET_BASE, 0, 8, 0)?;
             self.save.mode_seen = Some((now, base[0] == self.mode));
