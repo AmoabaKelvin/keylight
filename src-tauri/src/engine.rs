@@ -34,6 +34,8 @@ const TRACED: (u16, &str) = (0x1028, "1.0.23.6");
 const BOARD_SAVES_AFTER: Duration = Duration::from_millis(1500);
 /// While a save would be wasted, the hidden LED is poked this often, well inside the board's second.
 const NUDGE_EVERY: Duration = Duration::from_millis(500);
+/// Pokes need the board's OS mode to be the bank Keylight writes, read no longer ago than this.
+const MODE_FRESH: Duration = Duration::from_secs(10);
 /// The board is held from saving for at most this long after the colours last really changed.
 const HOLD_FOR: Duration = Duration::from_secs(600);
 
@@ -136,6 +138,10 @@ struct Save {
     real: Option<Instant>,
     /// The last colour poked (its red), so each poke differs from the one before.
     pokes: u8,
+    /// When the board's OS mode (0xA0 byte 0) was last read, and whether it was Keylight's bank. A
+    /// 0xD8 to the other OS mode's bank goes to that mode's colours, and saves at once when they
+    /// aren't the ones loaded and the loaded ones are unsaved (FW 0x15844-0x1590a).
+    mode_seen: Option<(Instant, bool)>,
 }
 
 /// The LED poked to hold a save: the first side LED, inside the board's own range.
@@ -146,11 +152,16 @@ fn hidden_led(board: &Board) -> Option<u8> {
 /// Where a flush sends its packets: the keyboard, or a model of one in tests.
 pub(crate) trait Wire {
     fn set(&self, cmd: u8, offset: usize, data: &[u8], bank: u8) -> Result<(), hid::Error>;
+    fn get(&self, cmd: u8, offset: usize, total: usize, bank: u8) -> Result<Vec<u8>, hid::Error>;
 }
 
 impl Wire for Keyboard {
     fn set(&self, cmd: u8, offset: usize, data: &[u8], bank: u8) -> Result<(), hid::Error> {
         Keyboard::set(self, cmd, offset, data, bank)
+    }
+
+    fn get(&self, cmd: u8, offset: usize, total: usize, bank: u8) -> Result<Vec<u8>, hid::Error> {
+        Keyboard::get(self, cmd, offset, total, bank)
     }
 }
 
@@ -725,6 +736,11 @@ impl Engine {
             self.save.flash = Some(self.sent.iter().map(|(l, c)| (*l, *c)).collect());
             self.save.changed = None;
         }
+        let stale = self.save.mode_seen.is_none_or(|(t, _)| now.saturating_duration_since(t) >= MODE_FRESH);
+        if stale && self.connected().is_some_and(|b| self.pokes(b, now)) {
+            let base = kb.get(hid::GET_BASE, 0, 8, 0)?;
+            self.save.mode_seen = Some((now, base[0] == self.mode));
+        }
         let plan = self.plan(now);
         for (cmd, offset, data) in &plan.packets {
             kb.set(*cmd, *offset, data, self.mode)?;
@@ -804,7 +820,8 @@ impl Engine {
             // get an LED past their own keys (the old 0xD8 handler doesn't bound it well).
             let limit = if board.status == Status::Supported { u8::MAX } else { board.key_leds };
             plan.leds = self.compose().into_iter().filter(|(l, c)| *l < limit && (plan.repaint || self.sent.get(l) != Some(c))).collect();
-            if self.pokes(board, now) {
+            let same_bank = self.save.mode_seen.is_some_and(|(t, ok)| ok && now.saturating_duration_since(t) < MODE_FRESH);
+            if same_bank && self.pokes(board, now) {
                 plan.poke = hidden_led(board).map(|l| (l, [self.save.pokes.wrapping_add(1), 0, 0]));
             }
             let mut payload: Vec<u8> = plan.leds.iter().flat_map(|(l, c)| [*l, c[0], c[1], c[2]]).collect();
@@ -1752,6 +1769,29 @@ mod tests {
         for (pid, fw) in [(0x102A, "1.0.23.6"), (0x1029, "1.0.23.6"), (0x1028, "1.0.22.6"), (0x1028, "1.0.17.6"), (0x1028, "1.0.24.6")] {
             assert_eq!(idle_packets(pid, fw), 0, "{pid:#x} {fw}");
         }
+    }
+
+    #[test]
+    fn no_pokes_while_the_board_is_in_the_other_os_mode() {
+        let mut sim = Sim::air75();
+        sim.kb.set_os(1); // switched to Windows on the keyboard; Keylight writes the Mac bank
+        sim.hyper(300);
+        let packets = sim.kb.packets();
+        sim.wait(5000);
+        assert_eq!(sim.kb.packets(), packets, "no pokes");
+        // Back to Mac mid-hold, then away again: pokes start, and stop within the 10 s it's trusted.
+        sim.kb.set_os(0);
+        sim.hyper(300);
+        sim.wait(11_000);
+        let records = sim.kb.records();
+        let packets = sim.kb.packets();
+        sim.kb.set_os(1);
+        sim.wait(12_000);
+        assert_eq!(sim.kb.records(), records + 1, "one save once the switch is seen");
+        let after = sim.kb.packets();
+        sim.wait(5000);
+        assert_eq!(sim.kb.packets(), after, "and no more pokes");
+        assert!(after > packets);
     }
 
     #[test]

@@ -29,11 +29,12 @@ struct State {
     records: u32,
     flash: [[u8; 3]; 104],
     packets: u32,
+    os: u8,
 }
 
 impl MockBoard {
     pub fn new(now: Instant) -> MockBoard {
-        MockBoard { s: Mutex::new(State { now, ram: [[0; 3]; 104], unsaved: false, stamp: now, records: 0, flash: [[0; 3]; 104], packets: 0 }) }
+        MockBoard { s: Mutex::new(State { now, ram: [[0; 3]; 104], unsaved: false, stamp: now, records: 0, flash: [[0; 3]; 104], packets: 0, os: 0 }) }
     }
 
     /// Runs the board's idle task up to `now`.
@@ -64,6 +65,11 @@ impl MockBoard {
     /// The colours in the last record.
     pub fn flash(&self) -> [[u8; 3]; 104] {
         self.s.lock().unwrap().flash
+    }
+
+    /// Switches the OS mode, as Fn does on the keyboard.
+    pub fn set_os(&self, os: u8) {
+        self.s.lock().unwrap().os = os;
     }
 
     /// 0xD8 packets received.
@@ -106,5 +112,12 @@ impl Wire for MockBoard {
             _ => panic!("lighting sends only 0xD6 and 0xD8, not {cmd:#04x}"),
         }
         Ok(())
+    }
+
+    fn get(&self, cmd: u8, _offset: usize, total: usize, _bank: u8) -> Result<Vec<u8>, hid::Error> {
+        assert_eq!(cmd, hid::GET_BASE, "lighting reads only 0xA0");
+        let mut b = vec![0; total];
+        b[0] = self.s.lock().unwrap().os;
+        Ok(b)
     }
 }
