@@ -96,6 +96,8 @@ SIG="$(cat "$out/$updater.sig")" \
 cat >"$out/notes.md" <<EOF
 **Requirements:** a Mac on macOS 13 or later (Apple silicon or Intel) and an Air75 V3 connected with the USB cable. The 2.4G dongle and Bluetooth can't carry settings.
 
+**Other NuPhy IO boards** (Air65 V3, Air100 V3, Kick75, Node75/100, Halo V2) are experimental and untested: Keylight detects them, and lighting is an opt-in switch on the Device page. Copy diagnostics there and open an issue to help us confirm yours.
+
 **First launch:** the app isn't notarised. Unzip it, move it to Applications and open it once. Then go to System Settings → Privacy & Security and click Open Anyway.
 
 **Updating:** from 0.2.0 on, Keylight updates itself from Device → Updates or the menu bar menu. On 0.1.0, download this one by hand.
