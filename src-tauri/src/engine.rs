@@ -29,6 +29,8 @@ const PREVIEW_TTL: Duration = Duration::from_secs(20);
 const SIDE_MIN_INTERVAL: Duration = Duration::from_millis(750);
 /// The Air75 V3 saves its per-key colours once no 0xD8 has changed one for a second (firmware
 /// 1.0.23.6). After this long, Keylight takes it that the board has.
+/// The one board and firmware whose save was traced; `Save` holds saves on it only.
+const TRACED: (u16, &str) = (0x1028, "1.0.23.6");
 const BOARD_SAVES_AFTER: Duration = Duration::from_millis(1500);
 /// While a save would be wasted, the hidden LED is poked this often, well inside the board's second.
 const NUDGE_EVERY: Duration = Duration::from_millis(500);
@@ -753,8 +755,9 @@ impl Engine {
         Ok(())
     }
 
-    /// Whether this flush pokes the hidden LED (`Save`): on the Air75 V3, while the board holds a
-    /// change it hasn't saved, saving it would be wasted, and the last change is `NUDGE_EVERY` old.
+    /// Whether this flush pokes the hidden LED (`Save`): only on the ANSI Air75 V3 with firmware
+    /// 1.0.23.6, the one traced (`TRACED`), while the board holds a change it hasn't saved, saving it
+    /// would be wasted, and the last change is `NUDGE_EVERY` old.
     fn pokes(&self, board: &Board, now: Instant) -> bool {
         let Some(changed) = self.save.changed else { return false };
         let passing = self.hyper || self.preview.is_some();
@@ -762,7 +765,8 @@ impl Engine {
         let held_long = self.save.real.is_some_and(|t| now.saturating_duration_since(t) >= HOLD_FOR);
         // An effect or shape theme only paints keys for Hyper, the same each time, so the board saves
         // the highlight once and never again; a poke would make every Hyper cost a save.
-        !self.owns_keys() && board.status == Status::Supported && wasted && !held_long && now.saturating_duration_since(changed) >= NUDGE_EVERY
+        let traced = (board.pid, self.firmware()) == (TRACED.0, Some(TRACED.1));
+        traced && !self.owns_keys() && wasted && !held_long && now.saturating_duration_since(changed) >= NUDGE_EVERY
     }
 
     /// The packets that bring the keyboard in line: light state (0xD6) and per-key colours (0xD8),
@@ -1731,6 +1735,23 @@ mod tests {
         assert_eq!(sim.e.writes, writes);
         let nudges = sim.kb.packets() - packets;
         assert!((80..=120).contains(&nudges), "about two a second, got {nudges}");
+    }
+
+    #[test]
+    fn only_the_traced_board_and_firmware_are_poked() {
+        let idle_packets = |pid: u16, fw: &str| {
+            let mut sim = Sim::new(pid, fw);
+            sim.e.hyper_keys = ["t"].map(String::from).into_iter().collect();
+            sim.wait(3000);
+            sim.hyper(300);
+            let packets = sim.kb.packets();
+            sim.wait(10_000);
+            sim.kb.packets() - packets
+        };
+        assert!(idle_packets(0x1028, "1.0.23.6") > 10, "ANSI 1.0.23.6 is held");
+        for (pid, fw) in [(0x102A, "1.0.23.6"), (0x1029, "1.0.23.6"), (0x1028, "1.0.22.6"), (0x1028, "1.0.17.6"), (0x1028, "1.0.24.6")] {
+            assert_eq!(idle_packets(pid, fw), 0, "{pid:#x} {fw}");
+        }
     }
 
     #[test]
