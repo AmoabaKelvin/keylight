@@ -1594,6 +1594,14 @@ mod tests {
             }
         }
 
+        /// Time passes with no ticks, as when the engine is busy: the board keeps running.
+        fn stall(&mut self, ms: u64) {
+            for _ in 0..ms / 50 {
+                self.ms += 50;
+                self.kb.run(self.now());
+            }
+        }
+
         fn op(&mut self, msg: Value) {
             self.e.handle(&msg).unwrap();
             self.flush();
@@ -1606,13 +1614,14 @@ mod tests {
             self.op(json!({ "op": "hyper", "on": false }));
         }
 
-        /// The keys show exactly the frame: pokes go to a side LED, which per-key mode doesn't show.
+        /// The keys show exactly the frame. Pokes go to the first side LED, past every key.
         fn check_frame(&self) {
-            if self.e.main_target(self.e.connected().unwrap()) != Main::Custom {
+            let Some(board) = self.e.connected() else { return };
+            if self.e.main_target(board) != Main::Custom {
                 return; // an effect: the board draws the keys itself
             }
-            let shown = self.kb.shown();
-            let off: Vec<_> = self.e.compose().into_iter().filter(|(l, c)| shown.get(*l as usize) != Some(c)).collect();
+            let ram = self.kb.ram();
+            let off: Vec<_> = self.e.compose().into_iter().filter(|(l, c)| ram[*l as usize] != *c).collect();
             assert!(off.is_empty(), "{off:?}");
         }
     }
@@ -1728,6 +1737,48 @@ mod tests {
             }
             assert_eq!(sim.kb.records(), records);
         }
+    }
+
+    #[test]
+    fn a_stalled_tick_lets_one_save_through() {
+        let mut sim = Sim::air75();
+        sim.hyper(300);
+        sim.wait(2000);
+        sim.stall(1500); // say a keymap backup holds the engine
+        assert_eq!(sim.kb.records(), 2, "the board saved the colours it had");
+        sim.wait(10_000);
+        assert_eq!(sim.kb.records(), 2);
+        for _ in 0..10 {
+            sim.hyper(300);
+            sim.wait(3000);
+        }
+        assert_eq!(sim.kb.records(), 2, "held again");
+    }
+
+    #[test]
+    fn unplugged_mid_hold() {
+        let mut sim = Sim::air75();
+        sim.op(json!({ "op": "hyper", "on": true }));
+        sim.wait(2000);
+        let highlight = sim.e.compose();
+        sim.e.drop_kb(hid::Error::Unplugged);
+        sim.stall(2000);
+        assert_eq!(sim.kb.records(), 2, "the board saves what it shows");
+        assert!(highlight.iter().all(|(l, c)| sim.kb.flash()[*l as usize] == *c));
+        sim.e.handle(&json!({ "op": "hyper", "on": false })).unwrap(); // Karabiner, while unplugged
+        sim.wait(5000);
+        assert_eq!(sim.kb.records(), 2, "nothing sent while unplugged");
+        // Plugged back in: the theme is painted and saved once, and Hyper is held again.
+        plug(&mut sim.e, 0x1028, "1.0.23.6");
+        sim.flush();
+        sim.wait(3000);
+        assert_eq!(sim.kb.records(), 3);
+        assert!(sim.e.compose().iter().all(|(l, c)| sim.kb.flash()[*l as usize] == *c));
+        for _ in 0..10 {
+            sim.hyper(300);
+            sim.wait(3000);
+        }
+        assert_eq!(sim.kb.records(), 3);
     }
 
     #[test]

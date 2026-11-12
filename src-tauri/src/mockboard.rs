@@ -57,11 +57,6 @@ impl MockBoard {
         self.s.lock().unwrap().ram
     }
 
-    /// What the keys show in per-key mode: LEDs 0..83.
-    pub fn shown(&self) -> Vec<[u8; 3]> {
-        self.s.lock().unwrap().ram[..84].to_vec()
-    }
-
     /// The colours in the last record.
     pub fn flash(&self) -> [[u8; 3]; 104] {
         self.s.lock().unwrap().flash
