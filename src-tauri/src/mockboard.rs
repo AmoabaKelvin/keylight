@@ -3,6 +3,8 @@
 //!
 //! - 0xD8 (handler 0x157ee) keeps 104 colours in RAM. A packet that changes one sets the unsaved
 //!   flag and stamps the time (0x158de-0x158ec); one that changes nothing does neither.
+//! - In per-key mode (21) the custom renderer (0x9bc4) paints LEDs 0..83 only (it stops at 0x54,
+//!   0x9bc8-0x9bea); LEDs 84..103 are drawn by the side renderer, never from these colours.
 //! - The idle task (0x149c6) saves once the flag is set and more than 999 ms have passed: a 512-byte
 //!   "NRGB" record (0x1468a), erasing one of the two 512-byte slots it alternates between.
 //! - 0xD6 side mode (offset 9) above 4 latches the setter (0xe2f8 only stores while the current mode
@@ -52,6 +54,11 @@ impl MockBoard {
 
     pub fn ram(&self) -> [[u8; 3]; 104] {
         self.s.lock().unwrap().ram
+    }
+
+    /// What the keys show in per-key mode: LEDs 0..83.
+    pub fn shown(&self) -> Vec<[u8; 3]> {
+        self.s.lock().unwrap().ram[..84].to_vec()
     }
 
     /// The colours in the last record.

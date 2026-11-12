@@ -30,10 +30,8 @@ const SIDE_MIN_INTERVAL: Duration = Duration::from_millis(750);
 /// The Air75 V3 saves its per-key colours once no 0xD8 has changed one for a second (firmware
 /// 1.0.23.6). After this long, Keylight takes it that the board has.
 const BOARD_SAVES_AFTER: Duration = Duration::from_millis(1500);
-/// While a save would be wasted, one LED is nudged this often, well inside the board's second.
+/// While a save would be wasted, the hidden LED is poked this often, well inside the board's second.
 const NUDGE_EVERY: Duration = Duration::from_millis(500);
-/// Only a channel at least this bright is nudged, so one step is under 1% of it.
-const NUDGE_MIN: u8 = 128;
 /// The board is held from saving for at most this long after the colours last really changed.
 const HOLD_FOR: Duration = Duration::from_secs(600);
 
@@ -109,10 +107,8 @@ struct Plan {
     repaint: bool,
     leds: Vec<(u8, Rgb)>,
     side: Option<[u8; 6]>,
-    /// The LED shown one step dimmer after this flush (`Save`).
-    nudged: Option<u8>,
-    /// The 0xD8 only moves the nudge: nothing the user would see.
-    nudge_only: bool,
+    /// The colour written to the hidden LED in this flush (`Save`).
+    poke: Option<(u8, Rgb)>,
 }
 
 /// What Keylight knows of the Air75 V3's per-key save (firmware 1.0.23.6, docs/PROTOCOL.md "Flash
@@ -122,10 +118,12 @@ struct Plan {
 ///
 /// So while the save the board is waiting to make would be wasted (a highlight is up, or the
 /// colours are back to what the flash holds), Keylight keeps it waiting: every `NUDGE_EVERY` it
-/// shows one bright LED one step dimmer, or puts it back, and each change restarts the board's
-/// second. Once the colours settle on something new, or `HOLD_FOR` after they last changed, the
-/// nudging stops and the board saves once. 0xD8 doesn't restart the board's sleep timers, which only
-/// keys and power changes do, so the nudging doesn't keep it awake.
+/// writes a new colour to the first side LED, and each change restarts the board's second. 0xD8
+/// keeps and saves that LED like a key (it takes 0..103, FW 0x157fe), but per-key mode never shows
+/// it: the custom renderer paints LEDs 0..83 only (FW 0x9bc8) and the side renderer draws the bars
+/// itself. Once the colours settle on something new, or `HOLD_FOR` after they last changed, the
+/// poking stops and the board saves once. 0xD8 doesn't restart the board's sleep timers, which only
+/// keys and power changes do, so the poking doesn't keep it awake.
 #[derive(Default)]
 struct Save {
     /// The colours in the board's flash, once Keylight has seen it save them.
@@ -134,15 +132,13 @@ struct Save {
     changed: Option<Instant>,
     /// When a 0xD8 last changed a colour other than by a nudge: Hyper, a theme, a shape.
     real: Option<Instant>,
-    /// The LED the board shows one step dimmer now.
-    nudged: Option<u8>,
+    /// The last colour poked (its red), so each poke differs from the one before.
+    pokes: u8,
 }
 
-/// The colour one step dimmer on its brightest channel.
-fn nudge(mut c: Rgb) -> Rgb {
-    let i = if c[0] >= c[1] && c[0] >= c[2] { 0 } else if c[1] >= c[2] { 1 } else { 2 };
-    c[i] = c[i].saturating_sub(1);
-    c
+/// The LED poked to hold a save: the first side LED, inside the board's own range.
+fn hidden_led(board: &Board) -> Option<u8> {
+    (board.side_leds > 0).then_some(board.key_leds)
 }
 
 /// Where a flush sends its packets: the keyboard, or a model of one in tests.
@@ -730,8 +726,8 @@ impl Engine {
         let plan = self.plan(now);
         for (cmd, offset, data) in &plan.packets {
             kb.set(*cmd, *offset, data, self.mode)?;
-            if !(*cmd == hid::SET_SIGNAL && plan.nudge_only) {
-                self.writes += 1;
+            if !(*cmd == hid::SET_SIGNAL && plan.leds.is_empty()) {
+                self.writes += 1; // a poke alone changes nothing the user sees
             }
         }
         if let Some(main) = plan.main {
@@ -740,13 +736,15 @@ impl Engine {
         if plan.repaint {
             self.sent.clear();
         }
-        if !plan.leds.is_empty() {
+        if !plan.leds.is_empty() || plan.poke.is_some() {
             self.save.changed = Some(now);
-            if !plan.nudge_only {
-                self.save.real = Some(now);
-            }
         }
-        self.save.nudged = plan.nudged;
+        if !plan.leds.is_empty() {
+            self.save.real = Some(now);
+        }
+        if let Some((_, c)) = plan.poke {
+            self.save.pokes = c[0];
+        }
         self.sent.extend(plan.leds);
         if let Some(side) = plan.side {
             self.side_sent = Some(side);
@@ -755,24 +753,14 @@ impl Engine {
         Ok(())
     }
 
-    /// The LED to show one step dimmer after this flush (`Save`), or None. Only on the Air75 V3,
-    /// whose save this is known for, and only while the board holds a change it hasn't saved.
-    fn nudge_led(&self, board: &Board, frame: &Leds, now: Instant) -> Option<u8> {
-        let changed = self.save.changed?;
+    /// Whether this flush pokes the hidden LED (`Save`): on the Air75 V3, while the board holds a
+    /// change it hasn't saved, saving it would be wasted, and the last change is `NUDGE_EVERY` old.
+    fn pokes(&self, board: &Board, now: Instant) -> bool {
+        let Some(changed) = self.save.changed else { return false };
         let passing = self.hyper || self.preview.is_some();
-        let wasted = passing || self.save.flash.as_ref().is_some_and(|f| *f == self.frame(false).into_iter().filter(|(l, _)| frame.contains_key(l)).collect::<Leds>());
+        let wasted = passing || self.save.flash.as_ref().is_some_and(|f| *f == self.frame(false));
         let held_long = self.save.real.is_some_and(|t| now.saturating_duration_since(t) >= HOLD_FOR);
-        if board.status != Status::Supported || !wasted || held_long {
-            return None;
-        }
-        let bright = |l: &u8| frame.get(l).is_some_and(|c| c.iter().any(|v| *v >= NUDGE_MIN));
-        if now.saturating_duration_since(changed) < NUDGE_EVERY {
-            return self.save.nudged.filter(bright);
-        }
-        if self.save.nudged.is_some() {
-            return None; // put it back: that's a change too
-        }
-        frame.keys().copied().find(bright)
+        board.status == Status::Supported && wasted && !held_long && now.saturating_duration_since(changed) >= NUDGE_EVERY
     }
 
     /// The packets that bring the keyboard in line: light state (0xD6) and per-key colours (0xD8),
@@ -809,17 +797,15 @@ impl Engine {
             // A layout picked by hand can have more keys than the board; experimental boards never
             // get an LED past their own keys (the old 0xD8 handler doesn't bound it well).
             let limit = if board.status == Status::Supported { u8::MAX } else { board.key_leds };
-            let exact: Leds = self.compose().into_iter().filter(|(l, _)| *l < limit).collect();
-            plan.nudged = self.nudge_led(board, &exact, now);
-            let mut frame = exact.clone();
-            if let Some(c) = plan.nudged.and_then(|l| frame.get_mut(&l)) {
-                *c = nudge(*c);
+            plan.leds = self.compose().into_iter().filter(|(l, c)| *l < limit && (plan.repaint || self.sent.get(l) != Some(c))).collect();
+            if self.pokes(board, now) {
+                plan.poke = hidden_led(board).map(|l| (l, [self.save.pokes.wrapping_add(1), 0, 0]));
             }
-            plan.leds = frame.into_iter().filter(|(l, c)| plan.repaint || self.sent.get(l) != Some(c)).collect();
-            let near = |l: &u8, c: &Rgb| exact.get(l).is_some_and(|e| c == e || *c == nudge(*e));
-            plan.nudge_only = !plan.repaint && plan.leds.iter().all(|(l, c)| near(l, c) && self.sent.get(l).is_some_and(|s| near(l, s)));
-            if !plan.leds.is_empty() {
-                let payload: Vec<u8> = plan.leds.iter().flat_map(|(l, c)| [*l, c[0], c[1], c[2]]).collect();
+            let mut payload: Vec<u8> = plan.leds.iter().flat_map(|(l, c)| [*l, c[0], c[1], c[2]]).collect();
+            if let Some((l, c)) = plan.poke {
+                payload.extend([l, c[0], c[1], c[2]]);
+            }
+            if !payload.is_empty() {
                 plan.packets.push((hid::SET_SIGNAL, 0, payload));
             }
         }
@@ -1609,15 +1595,11 @@ mod tests {
             self.op(json!({ "op": "hyper", "on": false }));
         }
 
-        /// What the board shows is the frame, but for at most one LED one step dimmer.
+        /// The keys show exactly the frame: pokes go to a side LED, which per-key mode doesn't show.
         fn check_frame(&self) {
-            let ram = self.kb.ram();
-            let off: Vec<_> = self.e.compose().into_iter().filter(|(l, c)| ram[*l as usize] != *c).collect();
-            assert!(off.len() <= 1, "{off:?}");
-            for (l, c) in off {
-                assert_eq!(ram[l as usize], nudge(c), "LED {l}");
-                assert!(c.iter().max().unwrap() >= &NUDGE_MIN);
-            }
+            let shown = self.kb.shown();
+            let off: Vec<_> = self.e.compose().into_iter().filter(|(l, c)| shown.get(*l as usize) != Some(c)).collect();
+            assert!(off.is_empty(), "{off:?}");
         }
     }
 
@@ -1632,8 +1614,7 @@ mod tests {
         // Keylight quits: the board saves the waiting colours once, as they are.
         sim.kb.run(sim.now() + Duration::from_secs(2));
         assert_eq!(sim.kb.records(), 2);
-        let frame = sim.e.compose();
-        assert!(frame.iter().filter(|(l, c)| sim.kb.flash()[**l as usize] != **c).count() <= 1);
+        assert!(sim.e.compose().iter().all(|(l, c)| sim.kb.flash()[*l as usize] == *c), "the keys as shown");
     }
 
     #[test]
@@ -1676,19 +1657,30 @@ mod tests {
     }
 
     #[test]
-    fn a_dim_frame_is_not_nudged() {
-        let mut sim = Sim::new(0x1028, "1.0.23.6");
-        base(&mut sim.e, json!({ "name": "solid", "color": [255, 170, 110], "level": 30 }));
-        sim.flush();
-        sim.wait(3000);
-        let writes = sim.kb.records();
+    fn dim_and_dark_frames_are_held_too() {
+        for level in [30, 0] {
+            let mut sim = Sim::new(0x1028, "1.0.23.6");
+            base(&mut sim.e, json!({ "name": "solid", "color": [255, 170, 110], "level": level }));
+            sim.flush();
+            sim.wait(3000);
+            let records = sim.kb.records();
+            sim.hyper(300);
+            sim.wait(3000);
+            sim.hyper(4000);
+            sim.wait(3000);
+            assert_eq!(sim.kb.records(), records, "level {level}");
+        }
+    }
+
+    #[test]
+    fn pokes_go_to_the_first_side_led_only() {
+        let mut sim = Sim::air75();
+        let before = sim.kb.ram();
         sim.hyper(300);
-        sim.wait(3000);
-        sim.hyper(4000);
-        sim.wait(3000);
-        // No LED bright enough to nudge unseen: one save a press, as before, and none during a long hold.
-        assert_eq!(sim.kb.records(), writes + 2);
-        assert!(sim.e.compose().iter().all(|(l, c)| sim.kb.ram()[*l as usize] == *c));
+        sim.wait(5000);
+        let after = sim.kb.ram();
+        let changed: Vec<usize> = (84..104).filter(|l| before[*l] != after[*l]).collect();
+        assert_eq!(changed, [84]);
     }
 
     #[test]
